@@ -1,0 +1,108 @@
+{
+  "system": {
+    "total_ram_gb": 7.91,
+    "available_ram_gb": 1.19,
+    "cpu_count": 8
+  },
+  "nicto": {
+    "total_parameters": 3358919970816,
+    "total_parameters_billions": 3358.9,
+    "active_parameters_per_token": 413587932672,
+    "active_parameters_billions": 413.6,
+    "model_size_gb_fp16": 6717.8,
+    "max_context": "10M tokens (Mamba)",
+    "architecture": "Hybrid (MLA + MoE + Mamba + Liquid + Consciousness)",
+    "modalities": [
+      "Text",
+      "Vision (VGG16)",
+      "Audio"
+    ],
+    "trained": false,
+    "config_source": "model_config.py",
+    "readme_claim": "~150B",
+    "actual_calculated": "~3358.9B",
+    "breakdown": {
+      "reasoning_cortex": {
+        "params": 3308703461376,
+        "pct": 98.5
+      },
+      "emotional_cortex": {
+        "params": 38655492096,
+        "pct": 1.2
+      },
+      "memory_cortex": {
+        "params": 4934860800,
+        "pct": 0.1
+      },
+      "perception_cortex": {
+        "params": 728760320,
+        "pct": 0.0
+      },
+      "creative_cortex": {
+        "params": 4832034816,
+        "pct": 0.1
+      },
+      "consciousness": {
+        "params": 16785408,
+        "pct": 0.0
+      },
+      "embedding": {
+        "params": 1048576000,
+        "pct": 0.0
+      }
+    }
+  },
+  "gemini": {
+    "name": "Gemini 2.5 Pro",
+    "release": "March 2025 (GA June 2025)",
+    "total_parameters": "Not disclosed (estimated 1.5-1.8T)",
+    "active_parameters": "Not disclosed (estimated 50-100B)",
+    "context_window": 1048576,
+    "max_output": 65536,
+    "architecture": "Sparse MoE Transformer",
+    "modalities": [
+      "Text",
+      "Image",
+      "Audio",
+      "Video",
+      "PDF"
+    ],
+    "thinking": true,
+    "native_multimodal": true,
+    "open_weights": false,
+    "trained": true,
+    "benchmarks": {
+      "swe_bench_verified": "59.6%",
+      "gpqa_diamond": "86.4%",
+      "mmmu": "68%"
+    },
+    "pricing": {
+      "input": "$1.25 / 1M tokens",
+      "output": "$10.00 / 1M tokens"
+    }
+  },
+  "comparison": {
+    "nicto_advantages": [
+      "Open weights (self-hostable, fine-tunable)",
+      "6 diverse neural networks (not just Transformer)",
+      "O(N) sequence modeling via Mamba SSM",
+      "Built-in metacognition (Consciousness layer)",
+      "Hierarchical memory (working + episodic + semantic)",
+      "Anti-hallucination verification engine",
+      "Offline learning via Dream Engine",
+      "10M theoretical context (vs 1M)",
+      "12.5% sparse computation (MoE)"
+    ],
+    "gemini_advantages": [
+      "Actually trained on massive multimodal corpus",
+      "Proven benchmarks (SWE-Bench 59.6%, GPQA 86.4%)",
+      "5-modality native multimodal",
+      "Production-ready API with 99.9% uptime",
+      "Built-in thinking/reasoning with budget control",
+      "Google-scale training infrastructure",
+      "Continuous updates and improvements",
+      "Working today, no setup required"
+    ]
+  },
+  "disclaimer": "Gemini parameter counts are NOT disclosed by Google. Estimates from industry analysis. NICTO params calculated from model_config.py."
+}
