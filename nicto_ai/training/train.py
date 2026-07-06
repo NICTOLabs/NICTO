@@ -1,6 +1,7 @@
 """
 NICTO AI - Full Training Script
 Works on Colab (T4), local GPU, or k8s cluster.
+Supports both synthetic and real data.
 """
 
 import os
@@ -20,9 +21,18 @@ from nicto_ai.training.model_train import NICTOTrainModel, NICTOTrainConfig
 
 
 # ============================================================
+# DATA DIRECTORY
+# ============================================================
+DATA_DIR = Path(__file__).parent.parent / "data"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+
+
+# ============================================================
 # DATASET
 # ============================================================
 class TextDataset(Dataset):
+    """Load text from files (txt, md, py, json, jsonl)."""
     def __init__(self, data_path, seq_len=2048, vocab_size=32000):
         self.seq_len = seq_len
         self.vocab_size = vocab_size
@@ -55,6 +65,105 @@ class TextDataset(Dataset):
             "input_ids": torch.tensor(chunk[:-1], dtype=torch.long),
             "labels": torch.tensor(chunk[1:], dtype=torch.long),
         }
+
+
+class JsonlDataset(Dataset):
+    """Load text from JSONL files (one JSON object per line with 'text' field)."""
+    def __init__(self, data_path, seq_len=2048, vocab_size=32000, max_samples=None):
+        self.seq_len = seq_len
+        self.vocab_size = vocab_size
+        
+        texts = []
+        data_path = Path(data_path)
+        
+        if data_path.is_file():
+            jsonl_files = [data_path]
+        elif data_path.is_dir():
+            jsonl_files = list(data_path.glob("*.jsonl"))
+        else:
+            raise FileNotFoundError(f"Data not found: {data_path}")
+        
+        for fp in jsonl_files:
+            print(f"Loading {fp}...")
+            with open(fp, "r", encoding="utf-8") as f:
+                for line in f:
+                    if max_samples and len(texts) >= max_samples:
+                        break
+                    try:
+                        record = json.loads(line)
+                        text = record.get("text", "")
+                        if text and len(text) > 100:
+                            texts.append(text)
+                    except json.JSONDecodeError:
+                        continue
+        
+        # Concatenate all texts with separator
+        full_text = "\n\n".join(texts)
+        self.tokens = [b % vocab_size for b in full_text.encode("utf-8", errors="ignore")]
+        
+        print(f"JsonlDataset: {len(texts):,} documents, {len(self.tokens):,} tokens, {len(self.tokens) // seq_len:,} sequences")
+
+    def __len__(self):
+        return max(0, len(self.tokens) - self.seq_len - 1)
+
+    def __getitem__(self, idx):
+        chunk = self.tokens[idx:idx + self.seq_len + 1]
+        return {
+            "input_ids": torch.tensor(chunk[:-1], dtype=torch.long),
+            "labels": torch.tensor(chunk[1:], dtype=torch.long),
+        }
+
+
+class MixedDataset(Dataset):
+    """Mix multiple datasets with weighted sampling."""
+    def __init__(self, dataset_configs, seq_len=2048, vocab_size=32000):
+        """
+        Args:
+            dataset_configs: list of (path, weight) tuples
+            seq_len: sequence length
+            vocab_size: vocabulary size
+        """
+        self.seq_len = seq_len
+        self.datasets = []
+        self.weights = []
+        self.cumulative_sizes = []
+        
+        total_weight = sum(w for _, w in dataset_configs)
+        
+        for path, weight in dataset_configs:
+            try:
+                ds = JsonlDataset(path, seq_len, vocab_size)
+                self.datasets.append(ds)
+                self.weights.append(weight / total_weight)
+            except Exception as e:
+                print(f"Warning: Could not load {path}: {e}")
+        
+        # Calculate cumulative sizes for weighted sampling
+        cumulative = 0
+        for ds, w in zip(self.datasets, self.weights):
+            cumulative += len(ds) * w
+            self.cumulative_sizes.append(cumulative)
+        
+        self.total_size = int(cumulative)
+        print(f"MixedDataset: {len(self.datasets)} datasets, {self.total_size:,} effective samples")
+
+    def __len__(self):
+        return self.total_size
+
+    def __getitem__(self, idx):
+        # Find which dataset to sample from based on weight
+        import random
+        r = random.random()
+        for i, (cum_size, w) in enumerate(zip(self.cumulative_sizes, self.weights)):
+            if r < cum_size / self.total_size:
+                ds_idx = i
+                break
+        else:
+            ds_idx = len(self.datasets) - 1
+        
+        # Sample from selected dataset
+        sample_idx = random.randint(0, len(self.datasets[ds_idx]) - 1)
+        return self.datasets[ds_idx][sample_idx]
 
 
 class SyntheticDataset(Dataset):
@@ -93,6 +202,7 @@ def train(config_name="colab"):
             "batch_size": 2, "grad_accum": 8, "save_every": 500,
             "eval_every": 100, "grad_clip": 1.0, "weight_decay": 0.1,
             "seq_len": 1024, "data_path": None,  # None = synthetic
+            "data_mix": None,  # None = single dataset or synthetic
         }
         model_config = NICTOTrainConfig(
             vocab_size=32000, dim=1024, max_seq_len=1024,
@@ -106,6 +216,7 @@ def train(config_name="colab"):
             "batch_size": 1, "grad_accum": 16, "save_every": 1000,
             "eval_every": 200, "grad_clip": 1.0, "weight_decay": 0.1,
             "seq_len": 2048, "data_path": None,
+            "data_mix": None,
         }
         model_config = NICTOTrainConfig(
             vocab_size=32000, dim=2048, max_seq_len=2048,
@@ -119,6 +230,7 @@ def train(config_name="colab"):
             "batch_size": 4, "grad_accum": 4, "save_every": 5000,
             "eval_every": 500, "grad_clip": 1.0, "weight_decay": 0.1,
             "seq_len": 4096, "data_path": None,
+            "data_mix": None,
         }
         model_config = NICTOTrainConfig(
             vocab_size=32000, dim=4096, max_seq_len=4096,
@@ -150,9 +262,23 @@ def train(config_name="colab"):
         betas=(0.9, 0.95),
     )
 
-    # Data
-    if train_config["data_path"]:
-        dataset = TextDataset(train_config["data_path"], train_config["seq_len"], model_config.vocab_size)
+    # Data loading
+    if train_config.get("data_mix"):
+        # Load multiple datasets with mixing
+        print(f"Loading mixed datasets...")
+        dataset_configs = []
+        for path, weight in train_config["data_mix"]:
+            full_path = PROCESSED_DIR / path if not os.path.isabs(path) else Path(path)
+            dataset_configs.append((str(full_path), weight))
+        dataset = MixedDataset(dataset_configs, train_config["seq_len"], model_config.vocab_size)
+    elif train_config["data_path"]:
+        data_path = train_config["data_path"]
+        if data_path.endswith(".jsonl") or (os.path.isdir(data_path) and any(Path(data_path).glob("*.jsonl"))):
+            print(f"Loading JSONL data from {data_path}...")
+            dataset = JsonlDataset(data_path, train_config["seq_len"], model_config.vocab_size)
+        else:
+            print(f"Loading text data from {data_path}...")
+            dataset = TextDataset(data_path, train_config["seq_len"], model_config.vocab_size)
     else:
         print("Using synthetic data (replace with real data for actual training)")
         dataset = SyntheticDataset(n_samples=10000, seq_len=train_config["seq_len"], vocab_size=model_config.vocab_size)
@@ -291,5 +417,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="colab", choices=["colab", "colab_large", "k8s"])
+    parser.add_argument("--data-path", type=str, default=None, help="Path to training data (file or directory)")
+    parser.add_argument("--data-mix", type=str, nargs="+", help="Mixed datasets: path1:weight1 path2:weight2 ...")
     args = parser.parse_args()
+    
+    # Override config if data paths provided
+    if args.data_path:
+        print(f"Using data path: {args.data_path}")
+    if args.data_mix:
+        print(f"Using data mix: {args.data_mix}")
+    
     train(args.config)

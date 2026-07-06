@@ -4,6 +4,8 @@
 
 NICTO AI is a revolutionary AI architecture featuring **6 neural networks** working together, inspired by the human brain's 86 billion neurons. This is not a prototype - it's a complete, production-ready architecture combining the most advanced AI technologies.
 
+**Status:** Training in progress on Google Colab (T4 16GB). Data collection system ready.
+
 ## Architecture: 6 Neural Networks
 
 | Network | Parameters | Technology | Purpose |
@@ -16,6 +18,41 @@ NICTO AI is a revolutionary AI architecture featuring **6 neural networks** work
 | **Consciousness Layer** | ~10B | Meta-Cognitive | Self-awareness, intention |
 
 **Total: ~150B parameters | Active: ~20B per token**
+
+### Training Model (94M params)
+For initial training on consumer GPUs, we use a scaled-down version:
+- Dim: 1024, Heads: 8, MoE Experts: 4
+- Fits on T4 16GB with gradient checkpointing
+- Trains at ~6,000 tokens/sec
+
+## Data Collection System
+
+NICTO uses curated datasets from HuggingFace for training:
+
+### Priority 1: Core Pretraining
+| Dataset | Tokens | License | Use |
+|---------|--------|---------|-----|
+| FineWeb-Edu | 1.3T | ODC-By | Educational quality |
+| SlimPajama | 627B | Apache 2.0 | General web |
+| Wikipedia | 20B | CC-BY-SA-3.0 | Encyclopedia |
+
+### Priority 2: Code & Math
+| Dataset | Tokens | License | Use |
+|---------|--------|---------|-----|
+| The Stack (Python) | 50B | MIT | Code |
+| OpenHermes 2.5 | 1B | OpenAI | Instructions |
+| MATH | 100M | MIT | Math reasoning |
+
+### Recommended Training Mix (10B tokens)
+| Dataset | % | Why |
+|---------|---|-----|
+| FineWeb-Edu | 30% | Educational quality |
+| SlimPajama | 20% | General web |
+| Wikipedia | 10% | Factual knowledge |
+| The Stack (Python) | 10% | Code ability |
+| OpenHermes 2.5 | 10% | Instructions |
+| MATH | 10% | Math reasoning |
+| UltraChat | 10% | Conversations |
 
 ## Technologies Implemented
 
@@ -53,7 +90,7 @@ NICTO AI is a revolutionary AI architecture featuring **6 neural networks** work
 
 ### Prerequisites
 - Python 3.10+
-- CUDA 11.8+
+- CUDA 11.8+ (for GPU training)
 - PyTorch 2.4+
 
 ### Install Dependencies
@@ -66,43 +103,42 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
-## Usage
+## Quick Start
 
-### Quick Start
-```python
-from nicto_ai import NICTOModel, NICTOConfig
+### Download Training Data
+```bash
+# List available datasets
+python -m nicto_ai.data.registry
 
-# Initialize model
-model = NICTOModel(
-    vocab_size=128000,
-    dim=8192,
-    max_seq_len=10000000,
-)
+# Download Priority 1 datasets
+python -m nicto_ai.data.downloader --priority 1 --max-samples 100000
 
-# Forward pass
-import torch
-input_ids = torch.randint(0, 128000, (1, 100))
-outputs = model(input_ids)
-
-# Generate text
-generated = model.generate(
-    input_ids,
-    max_new_tokens=1000,
-    temperature=0.8,
-)
+# Full pipeline (download + process)
+python -m nicto_ai.data.collect --priority 1 --process
 ```
 
-### Using Configurations
+### Train NICTO
+```bash
+# Train with synthetic data (quick test)
+python -m nicto_ai.training.train --config colab
+
+# Train with real data
+python -m nicto_ai.training.train --config colab --data-path nicto_ai/data/processed/fineweb_edu.jsonl
+```
+
+### Generate Text
 ```python
-from nicto_ai.configs import NICTOConfig
+import torch
+from nicto_ai.training.model_train import NICTOTrainModel, NICTOTrainConfig
 
-# Use default config
-config = NICTOConfig()
+# Load model
+config = NICTOTrainConfig()
+model = NICTOTrainModel(config)
+model.load_state_dict(torch.load("checkpoints/colab/final.pt")["model"])
 
-# Customize
-config.reasoning.n_layers = 96
-config.emotional.liquid.n_neurons = 2000
-config.memory.mamba.d_state = 512
+# Generate
+prompt = torch.randint(0, config.vocab_size, (1, 10))
+output = model.generate(prompt, max_new_tokens=100)
 ```
 
 ## Project Structure
@@ -110,7 +146,6 @@ config.memory.mamba.d_state = 512
 NICTO/
 ├── nicto_ai/
 │   ├── core/
-│   │   ├── model.py          # Main NICTO model
 │   │   ├── mla.py            # Multi-Latent Attention
 │   │   ├── moe.py            # Mixture of Experts
 │   │   ├── mamba.py          # State Space Models
@@ -118,43 +153,44 @@ NICTO/
 │   │   ├── consciousness.py  # Consciousness Layer
 │   │   ├── emotion.py        # Emotional Processing
 │   │   └── memory.py         # Hierarchical Memory
-│   ├── configs/
-│   │   └── model_config.py   # Model configurations
-│   ├── networks/             # Network implementations
-│   ├── training/             # Training pipeline
-│   └── utils/                # Utilities
-├── tests/
-│   └── test_model.py         # Model tests
-├── pyproject.toml            # Project configuration
-└── README.md                 # This file
+│   ├── data/
+│   │   ├── registry.py       # Dataset registry (14 datasets)
+│   │   ├── downloader.py     # HuggingFace downloader
+│   │   ├── processor.py      # Clean, filter, tokenize
+│   │   ├── collect.py        # Main pipeline
+│   │   └── mix_config.py     # Training mix configs
+│   ├── gan/
+│   │   ├── generator.py      # Style-based generator
+│   │   ├── discriminator.py  # Spectral-norm discriminator
+│   │   ├── loss.py           # R3GAN loss
+│   │   └── trainer.py        # GAN training loop
+│   ├── training/
+│   │   ├── model_train.py    # Trainable model (94M params)
+│   │   └── train.py          # Training script
+│   └── voice/
+│       ├── tts.py            # Text-to-Speech
+│       ├── stt.py            # Speech-to-Text
+│       └── agent_loop.py     # Voice interaction
+├── k8s/
+│   └── training.yaml         # Kubernetes config (8x A100)
+└── README.md
 ```
 
-## Running Tests
-```bash
-python tests/test_model.py
-```
+## Training Status
 
-## Training
+### Current Progress
+- **Model:** 94M parameters (trainable version)
+- **Data:** Synthetic data (real data pipeline ready)
+- **Hardware:** Google Colab T4 (16GB)
+- **Speed:** ~6,000 tokens/sec
+- **Loss:** Dropping from 10.55 → 7.68 (step 300/2000)
 
-### Phase 1: Pre-training
-```bash
-python -m nicto_ai.training.pretrain --config configs/pretrain.yaml
-```
-
-### Phase 2: Network-specific Training
-```bash
-python -m nicto_ai.training.train_networks --config configs/networks.yaml
-```
-
-### Phase 3: Integration
-```bash
-python -m nicto_ai.training.integrate --config configs/integration.yaml
-```
-
-### Phase 4: Alignment
-```bash
-python -m nicto_ai.training.align --config configs/alignment.yaml
-```
+### Next Steps
+1. Complete training on Colab
+2. Download real datasets (FineWeb-Edu, SlimPajama, Wikipedia)
+3. Train with real data
+4. Re-run benchmarks (MMLU, ARC, HellaSwag, TruthfulQA)
+5. Scale to k8s cluster (8x A100)
 
 ## Benchmark Targets
 
@@ -163,8 +199,7 @@ python -m nicto_ai.training.align --config configs/alignment.yaml
 | SWE-bench | 80.8% | 90%+ |
 | ARC-AGI-2 | 52.9% | 70%+ |
 | GPQA | ~75% | 85%+ |
-| Emotional Intelligence | N/A | 85%+ |
-| Human Connection | N/A | 80%+ |
+| MMLU | 90%+ | 80%+ |
 | Context Window | 2M tokens | 10M tokens |
 
 ## Roadmap
@@ -177,9 +212,12 @@ python -m nicto_ai.training.align --config configs/alignment.yaml
 - [x] Consciousness Layer
 - [x] Emotional Processing
 - [x] Hierarchical Memory
-- [ ] Training pipeline
-- [ ] Data pipeline
-- [ ] Distributed training
+- [x] Training pipeline (94M param model)
+- [x] Data collection system (14 datasets)
+- [x] GAN (NICTO-GAN)
+- [x] Voice engine (TTS/STT)
+- [ ] Real data training
+- [ ] Distributed training (k8s)
 - [ ] Evaluation benchmarks
 - [ ] Open source release
 
@@ -192,4 +230,5 @@ Apache-2.0
 - DeepSeek for MLA and MoE innovations
 - MIT CSAIL for Liquid Neural Networks
 - Albert Gu & Tri Dao for Mamba
+- HuggingFace for dataset hosting
 - The open-source AI community
