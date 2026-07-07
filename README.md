@@ -1,79 +1,95 @@
 # NICTO AI
 
-## What is this?
+Open-source neural architecture — reasoning, memory, emotion, and consciousness in one model.
 
-NICTO is an experimental AI architecture built from scratch — code, training pipeline, model, everything. It is currently **undergoing training on Google Colab** (free tier, T4 GPU).
+**Status:** Undergoing training on Google Colab (T4 GPU). Current checkpoint is ~207M parameters. No benchmarks run yet.
 
-**Current state: early training.** NICTO has been trained to ~207M parameters on synthetic data. The architecture supports scaling to much larger configurations, but no large-scale checkpoint exists yet. No benchmarks have been run.
-
-## Architecture
-
-NICTO combines multiple neural network approaches in a single model:
-
-- **Reasoning stack**: Attention + Mixture-of-Experts (MoE) blocks
-- **Memory stack**: Bidirectional transformer layers
-- **Emotional stack**: Causal transformer layers
-- **Creative stack**: Causal transformer layers
-- **Consciousness layer**: Self-monitoring projection
-- **Fusion gate**: Learned weighting across all stacks
-
-The trained checkpoint (207M params, dim=1024) is in this repo at `nicto_model_final.pt` via Git LFS.
-
-## Training
-
-Training runs on Google Colab Free (T4 16GB). The model trains on curated synthetic data and is being gradually exposed to real datasets (Wikipedia, code, reasoning).
+## Quick start
 
 ```bash
-# Train on Colab
-python -m nicto_ai.training.train --config colab
-
-# Train with real data mix
-python -m nicto_ai.training.train --config colab --use-real-data
-
-# Resume from checkpoint
-python -m nicto_ai.training.train --config colab --resume checkpoints/colab/final.pt
+git clone https://github.com/NICTOLabs/NICTO.git
+cd NICTO
+pip install -e .
 ```
 
-## What works
-
-- Full architecture implemented in PyTorch
-- Forward pass, loss computation, autoregressive generation — all verified
-- Training pipeline with real JSONL data support
-- Checkpoint save/resume
-- Data collection system (14 datasets from HuggingFace)
-- GAN (NICTO-GAN) — implemented, untested
-- Voice engine (TTS/STT/agent loop) — functional, uses local model
-
-## What doesn't work yet
-
-- Large-scale training (requires A100/H100, not available yet)
-- Benchmarks (none run)
-- Distributed training
-- Streaming audio / wake-word detection
-- Automated test suite
-
-## Data collection
+### Test the model
 
 ```bash
-# List available datasets
-python -m nicto_ai.data.registry
+python -c "
+import torch
+from nicto_ai.training.model_train import NICTOTrainModel, NICTOTrainConfig
 
-# Download and process
+config = NICTOTrainConfig()
+model = NICTOTrainModel(config)
+model.load_state_dict(torch.load('nicto_model_final.pt', weights_only=True))
+
+x = torch.randint(0, config.vocab_size, (1, 10))
+out = model.generate(x, max_new_tokens=50)
+print('Generated tokens:', out.shape[1] - 10)
+"
+```
+
+### Run the voice engine
+
+```python
+from nicto_ai.voice.backend_interface import NICTOBackend, Message
+
+backend = NICTOBackend(checkpoint_path="nicto_model_final.pt")
+result = backend.complete([Message(role="user", content="Hello")], max_tokens=50)
+print(result.text)
+```
+
+### Train
+
+```bash
+# Quick smoke test (synthetic data)
+python -m nicto_ai.training.train --config colab
+
+# With real data
+python -m nicto_ai.training.train --config colab --use-real-data
+
+# Download training datasets first
 python -m nicto_ai.data.collect --priority 1 --process
 ```
 
-## Project structure
+## Architecture
+
+NICTO combines multiple neural approaches in a single model:
+
+| Component | What it does |
+|-----------|-------------|
+| **Reasoning** | Attention + MoE blocks for logic, math, code |
+| **Memory** | Bidirectional transformer for context retention |
+| **Emotion** | Causal transformer for adaptive behavior |
+| **Creativity** | Causal transformer for generation |
+| **Consciousness** | Self-monitoring projection layer |
+| **Fusion gate** | Learned weighting across all components |
+
+## What's in the repo
 
 ```
 nicto_ai/
-├── core/           # Model components (attention, MoE, memory, emotion, consciousness)
-├── training/       # Training model + training loop
-├── data/           # Dataset registry, downloader, processor
-├── voice/          # TTS, STT, agent loop, backend
-├── gan/            # GAN generator, discriminator, trainer
-├── dream/          # Dream engine, data generation
-└── verification/   # Claim verification, grounding
+├── core/           # Model components
+├── training/       # Training model + loop
+├── data/           # Dataset registry, downloader
+├── voice/          # TTS, STT, agent loop
+├── gan/            # GAN trainer
+├── dream/          # Synthetic data generation
+└── verification/   # Claim verification
 ```
+
+## Requirements
+
+- Python 3.10+
+- PyTorch 2.0+
+- ~2GB disk for the checkpoint (Git LFS)
+
+## How it's trained
+
+NICTO is trained on Google Colab Free (T4 16GB) using PyTorch. The training pipeline supports:
+- Synthetic data (for quick testing)
+- Real datasets from HuggingFace (Wikipedia, code, reasoning)
+- Checkpoint save/resume
 
 ## License
 
