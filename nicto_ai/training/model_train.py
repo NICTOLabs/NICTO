@@ -26,11 +26,35 @@ class NICTOTrainConfig:
     creative_layers: int = 4
 
 
+def nicto_5b_config() -> "NICTOTrainConfig":
+    """
+    ~5.0B parameter config (verified analytically; requires an A100/H100-class
+    GPU with >=80GB VRAM for full fine-tuning, or a 24GB+ GPU with LoRA/QLoRA).
+    Do NOT attempt on a free-tier T4 (16GB) - weights alone need ~10GB in fp16,
+    and full training (grads + AdamW states) needs ~60-80GB.
+    """
+    return NICTOTrainConfig(
+        vocab_size=32000,
+        dim=2048,
+        max_seq_len=4096,
+        reasoning_layers=20,
+        n_heads=16,
+        n_kv_heads=4,
+        moe_experts=8,
+        moe_activated=2,
+        moe_hidden=5461,
+        memory_layers=8,
+        emotional_layers=6,
+        creative_layers=6,
+    )
+
+
 class RMSNorm(nn.Module):
     def __init__(self, dim, eps=1e-6):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim))
         self.eps = eps
+
     def forward(self, x):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
 
@@ -40,7 +64,7 @@ class SimpleAttention(nn.Module):
         super().__init__()
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
         self.wqkv = nn.Linear(dim, 3 * dim, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
         self.q_norm = RMSNorm(self.head_dim)
@@ -62,10 +86,14 @@ class SimpleMoE(nn.Module):
         self.n_experts = n_experts
         self.n_activated = n_activated
         self.gate = nn.Linear(dim, n_experts, bias=False)
-        self.experts = nn.ModuleList([
-            nn.Sequential(nn.Linear(dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, dim))
-            for _ in range(n_experts)
-        ])
+        self.experts = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, dim)
+                )
+                for _ in range(n_experts)
+            ]
+        )
 
     def forward(self, x):
         B, L, D = x.shape
@@ -94,25 +122,37 @@ class NICTOTrainModel(nn.Module):
         self.tok_emb = nn.Embedding(config.vocab_size, d)
         self.pos_emb = nn.Embedding(config.max_seq_len, d)
 
-        # Reasoning: MLA-style attention + MoE
-        self.r_norm = RMSNorm(d)
-        self.r_attn = SimpleAttention(d, config.n_heads, config.max_seq_len)
-        self.r_moe = SimpleMoE(d, config.moe_experts, config.moe_activated, config.moe_hidden)
-
         # Memory: bidirectional attention (like BERT)
-        mem_layer = nn.TransformerEncoderLayer(d, config.n_heads, d*4, batch_first=True, norm_first=True)
         self.m_norm = RMSNorm(d)
-        self.m_layers = nn.ModuleList([mem_layer for _ in range(config.memory_layers)])
+        self.m_layers = nn.ModuleList([
+            nn.TransformerEncoderLayer(d, config.n_heads, d * 4, batch_first=True, norm_first=True)
+            for _ in range(config.memory_layers)
+        ])
 
         # Emotional: causal transformer
-        emo_layer = nn.TransformerEncoderLayer(d, config.n_heads, d*4, batch_first=True, norm_first=True)
         self.e_norm = RMSNorm(d)
-        self.e_layers = nn.ModuleList([emo_layer for _ in range(config.emotional_layers)])
+        self.e_layers = nn.ModuleList([
+            nn.TransformerEncoderLayer(d, config.n_heads, d * 4, batch_first=True, norm_first=True)
+            for _ in range(config.emotional_layers)
+        ])
 
         # Creative: causal transformer
-        cre_layer = nn.TransformerEncoderLayer(d, config.n_heads, d*4, batch_first=True, norm_first=True)
         self.c_norm = RMSNorm(d)
-        self.c_layers = nn.ModuleList([cre_layer for _ in range(config.creative_layers)])
+        self.c_layers = nn.ModuleList([
+            nn.TransformerEncoderLayer(d, config.n_heads, d * 4, batch_first=True, norm_first=True)
+            for _ in range(config.creative_layers)
+        ])
+
+        # Reasoning: stack of attention+MoE blocks
+        self.r_norm = RMSNorm(d)
+        self.r_attn_layers = nn.ModuleList([
+            SimpleAttention(d, config.n_heads, config.max_seq_len)
+            for _ in range(config.reasoning_layers)
+        ])
+        self.r_moe_layers = nn.ModuleList([
+            SimpleMoE(d, config.moe_experts, config.moe_activated, config.moe_hidden)
+            for _ in range(config.reasoning_layers)
+        ])
 
         # Consciousness: self-monitoring
         self.co_norm = RMSNorm(d)
@@ -141,11 +181,15 @@ class NICTOTrainModel(nn.Module):
         pos = torch.arange(L, device=input_ids.device).unsqueeze(0)
         x = self.tok_emb(input_ids) + self.pos_emb(pos)
 
-        # 1. Reasoning: MLA attention + MoE FFN
-        h = self.r_norm(x)
-        h = x + self.r_attn(h)
-        h, aux_loss = self.r_moe(h)
-        r = x + h
+        # 1. Reasoning: stack of MLA-style attention + MoE blocks
+        r = x
+        aux_loss = 0.0
+        for attn, moe in zip(self.r_attn_layers, self.r_moe_layers):
+            h = self.r_norm(r)
+            h = r + attn(h)
+            h, layer_aux = moe(h)
+            r = r + h
+            aux_loss = aux_loss + layer_aux
 
         # 2. Memory: self-attention
         m = x + self.m_layers[0](self.m_norm(x))
@@ -167,7 +211,9 @@ class NICTOTrainModel(nn.Module):
 
         # 6. Fusion
         g = F.softmax(self.fusion_gate(torch.cat([r, m, e, c], -1)), -1)
-        fused = g[..., 0:1] * r + g[..., 1:2] * m + g[..., 2:3] * e + g[..., 3:4] * c + co
+        fused = (
+            g[..., 0:1] * r + g[..., 1:2] * m + g[..., 2:3] * e + g[..., 3:4] * c + co
+        )
 
         logits = self.lm_head(self.out_norm(fused))
         loss = None
@@ -175,7 +221,7 @@ class NICTOTrainModel(nn.Module):
             loss = F.cross_entropy(
                 logits[:, :-1].reshape(-1, logits.size(-1)),
                 labels[:, 1:].reshape(-1),
-                ignore_index=-100
+                ignore_index=-100,
             )
         return {"logits": logits, "loss": loss, "aux_loss": aux_loss}
 
@@ -185,7 +231,7 @@ class NICTOTrainModel(nn.Module):
             logits = self(ids)["logits"][:, -1] / temperature
             if top_k > 0:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, -1:]] = float('-inf')
+                logits[logits < v[:, -1:]] = float("-inf")
             ids = torch.cat([ids, torch.multinomial(F.softmax(logits, -1), 1)], -1)
         return ids
 

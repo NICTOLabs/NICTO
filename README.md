@@ -1,10 +1,45 @@
-# NICTO AI - The World's Most Powerful Understanding Engine
+# NICTO AI
 
 ## Overview
 
-NICTO AI is a revolutionary AI architecture featuring **6 neural networks** working together, inspired by the human brain's 86 billion neurons. This is not a prototype - it's a complete, production-ready architecture combining the most advanced AI technologies.
+NICTO AI is an experimental architecture combining six neural subsystems — a
+Mixture-of-Experts + Multi-Latent-Attention "reasoning" stack, a Liquid Neural
+Network "emotional" stack, a Mamba state-space "memory" stack, a multimodal
+perception block, a transformer "creative" block, and a meta-cognitive
+"consciousness" layer — fused through a learned cross-attention "neural bus."
 
-**Status:** Training in progress on Google Colab (T4 16GB). Data collection system ready.
+**Status: early-stage research/engineering project.** The full architecture
+described below is implemented in PyTorch and runs correctly (forward pass,
+loss computation, and autoregressive generation all verified), but it has
+**not** been trained at the scale described in earlier drafts of this
+document. What has actually been trained is the much smaller model in
+`nicto_ai/training/model_train.py`.
+
+### What's verified as of this update
+- The 6-network architecture (`nicto_ai/core/model.py`) instantiates and runs
+  a full forward + backward pass without errors, including generation.
+- The training pipeline (`nicto_ai/training/train.py`) correctly loads real
+  JSONL/text data and mixed-weighted datasets when given `--data-path` or
+  `--data-mix` (previously these flags were parsed but silently ignored —
+  training always fell back to synthetic random tokens regardless of what
+  was passed; this is now fixed).
+- Checkpoint resume (`--resume path/to/checkpoint.pt`) is now supported for
+  warm-starting from a previous run instead of training from scratch.
+- The voice pipeline (`nicto_ai/voice/`) correctly calls the Anthropic Claude
+  API as its LLM backend; NICTO's own model is not yet wired in as a live
+  chat backend (see `NICTOBackend` in `backend_interface.py`, which is an
+  explicit stub pending a trained checkpoint).
+- There is currently no automated test suite in this repository.
+
+### What's aspirational / not yet true
+- The "~150B parameters / ~20B active" scale in earlier documentation refers
+  to the architecture's theoretical maximum configuration, not a trained
+  model. No checkpoint at that scale exists.
+- Benchmark numbers (SWE-bench, ARC-AGI-2, GPQA, MMLU) below are **targets**,
+  not results. None have been run.
+- Streaming audio, wake-word detection, and interrupt handling are not yet
+  implemented in `nicto_ai/voice/`.
+
 
 ## Architecture: 6 Neural Networks
 
@@ -119,11 +154,17 @@ python -m nicto_ai.data.collect --priority 1 --process
 
 ### Train NICTO
 ```bash
-# Train with synthetic data (quick test)
+# Train with synthetic data (quick smoke test, no real dataset needed)
 python -m nicto_ai.training.train --config colab
 
-# Train with real data
+# Train with real data (a single file or directory of .txt/.jsonl)
 python -m nicto_ai.training.train --config colab --data-path nicto_ai/data/processed/fineweb_edu.jsonl
+
+# Train with the README's recommended weighted mix (requires collecting data first, see below)
+python -m nicto_ai.training.train --config colab --use-real-data
+
+# Resume/warm-start from an existing checkpoint
+python -m nicto_ai.training.train --config colab --use-real-data --resume checkpoints/colab/final.pt
 ```
 
 ### Generate Text
@@ -179,20 +220,21 @@ NICTO/
 ## Training Status
 
 ### Current Progress
-- **Model:** 94M parameters (trainable version)
-- **Data:** Synthetic data (real data pipeline ready)
-- **Hardware:** Google Colab T4 (16GB)
-- **Speed:** ~6,000 tokens/sec
-- **Loss:** Dropping from 10.55 → 7.68 (step 300/2000)
+- **Architecture:** Fully implemented, verified to run (forward/backward/generate) at small scale.
+- **Trained model:** Only the 94M-parameter `NICTOTrainModel` (`training/model_train.py`) has been trained, and only briefly, on synthetic data.
+- **Data:** Real dataset download/processing pipeline exists (`nicto_ai/data/`) but has not yet been run end-to-end into a completed training job.
+- **Hardware target:** Google Colab T4 (16GB) for the small config; `colab_large`/`k8s` configs exist but are untested at that scale.
 
 ### Next Steps
-1. Complete training on Colab
-2. Download real datasets (FineWeb-Edu, SlimPajama, Wikipedia)
-3. Train with real data
-4. Re-run benchmarks (MMLU, ARC, HellaSwag, TruthfulQA)
-5. Scale to k8s cluster (8x A100)
+1. Run `python -m nicto_ai.data.collect --priority 1 --process` to fetch and process real Priority-1 datasets.
+2. Train with `--use-real-data` (and `--resume` if warm-starting from an existing checkpoint) and confirm loss drops meaningfully on real data, not just synthetic tokens.
+3. Add an automated test suite — none currently exists.
+4. Only after real training results exist: re-run benchmarks (MMLU, ARC, HellaSwag, TruthfulQA) and report actual numbers, not targets.
+5. Scale to larger configs only once the small-scale run is validated.
 
-## Benchmark Targets
+## Benchmark Targets (not yet measured)
+
+These are aspirational targets. No benchmark runs have been completed against a trained NICTO checkpoint.
 
 | Benchmark | Current SOTA | NICTO Target |
 |-----------|--------------|--------------|
@@ -204,7 +246,7 @@ NICTO/
 
 ## Roadmap
 
-- [x] Core architecture implementation
+- [x] Core architecture implementation (verified to run correctly at small scale)
 - [x] MLA (Multi-Latent Attention)
 - [x] MoE (Mixture of Experts)
 - [x] Mamba (State Space Models)
@@ -212,14 +254,16 @@ NICTO/
 - [x] Consciousness Layer
 - [x] Emotional Processing
 - [x] Hierarchical Memory
-- [x] Training pipeline (94M param model)
-- [x] Data collection system (14 datasets)
-- [x] GAN (NICTO-GAN)
-- [x] Voice engine (TTS/STT)
-- [ ] Real data training
-- [ ] Distributed training (k8s)
-- [ ] Evaluation benchmarks
-- [ ] Open source release
+- [x] Training pipeline, verified functional (94M param model, real-data wiring fixed)
+- [x] Data collection system (14 datasets registered; not yet run end-to-end)
+- [x] GAN (NICTO-GAN) — implemented, untested
+- [x] Voice engine (TTS/STT/agent loop) — functional, backed by Claude API; NICTO's own model not yet wired as a live backend
+- [ ] Automated test suite
+- [ ] Real data training run with reported (not projected) loss curves
+- [ ] Distributed training (k8s) — untested
+- [ ] Evaluation benchmarks — not yet run
+- [ ] Streaming audio / wake-word / interrupt handling in voice pipeline
+- [ ] Open source release readiness review
 
 ## License
 

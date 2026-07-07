@@ -62,11 +62,11 @@ def download_dataset(
     try:
         # Load dataset
         print("Loading dataset from HuggingFace...")
-        kwargs = {"split": config.split}
+        load_kwargs = {}
         if config.subset:
-            kwargs["name"] = config.subset
+            load_kwargs["name"] = config.subset
         
-        dataset = load_dataset(config.hf_id, split=kwargs["split"], streaming=True)
+        dataset = load_dataset(config.hf_id, split=config.split, streaming=True, **load_kwargs)
         
         # Get total size if possible
         try:

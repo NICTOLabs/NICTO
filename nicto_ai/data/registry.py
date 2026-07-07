@@ -58,11 +58,12 @@ FINWEB_EDU = DatasetConfig(
     tokens_approx="1.3T",
     description="Educational quality web text. Best for knowledge and reasoning.",
     min_length=200,
+    subset="sample-10BT",  # Use 10B token sample for manageable download
 )
 
 SLIMPAJAMA = DatasetConfig(
     name="SlimPajama",
-    hf_id="cerebras/SlimPajama-627B",
+    hf_id="gmongaras/SlimPajama-627B_Reupload",
     split="train",
     text_field="text",
     license="Apache 2.0",
@@ -75,13 +76,14 @@ SLIMPAJAMA = DatasetConfig(
 WIKIPEDIA = DatasetConfig(
     name="Wikipedia",
     hf_id="wikimedia/wikipedia",
-    split="20231101.en",
+    split="train",
     text_field="text",
     license="CC-BY-SA-3.0",
     priority=1,
     tokens_approx="20B",
     description="English Wikipedia articles. Encyclopedia knowledge.",
     min_length=500,
+    subset="20231101.en",
 )
 
 
@@ -91,7 +93,7 @@ WIKIPEDIA = DatasetConfig(
 
 THE_STACK_PYTHON = DatasetConfig(
     name="The Stack (Python)",
-    hf_id="bigcode/thestack",
+    hf_id="bigcode/the-stack-v3-mcd",
     split="train",
     text_field="content",
     license="MIT",

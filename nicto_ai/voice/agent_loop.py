@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from .stt import SpeechToText, TranscriptionResult
 from .tts import TextToSpeech, SpeechResult
 from .executor import SandboxExecutor, ExecutionResult
-from .backend_interface import LLMBackend, Message, CompletionResult, ClaudeBackend, NICTOBackend, EchoBackend
+from .backend_interface import LLMBackend, Message, CompletionResult, NICTOBackend, EchoBackend
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,8 @@ class AgentConfig:
     stt_engine: str = "auto"
     tts_engine: str = "auto"
     tts_voice: str = "default"
-    llm_backend: str = "claude"  # "claude", "nicto", "echo"
+    llm_backend: str = "nicto"  # "nicto", "echo"
+    checkpoint_path: str = None  # Path to NICTO model checkpoint
     system_prompt: str = "You are NICTO, a helpful AI assistant. Respond concisely and accurately."
     max_history: int = 20  # Max conversation turns to remember
     enable_code_execution: bool = True
@@ -153,7 +154,7 @@ class VoiceAgent:
         finally:
             self.state.is_processing = False
 
-    def process_text(self, text: str) -> Optional[str]:
+    def process_text(self, text: str, max_tokens: int = 128) -> Optional[str]:
         """
         Process text input (for text-based interaction).
 
@@ -166,7 +167,7 @@ class VoiceAgent:
         self.state.is_processing = True
 
         try:
-            response = self._generate_response(text)
+            response = self._generate_response(text, max_tokens=max_tokens)
             final_response = self._process_actions(response)
             self.state.last_response = final_response
             self.state.total_turns += 1
@@ -174,7 +175,7 @@ class VoiceAgent:
         finally:
             self.state.is_processing = False
 
-    def _generate_response(self, user_input: str) -> str:
+    def _generate_response(self, user_input: str, max_tokens: int = 128) -> str:
         """Generate LLM response from user input."""
         # Add user message to history
         self.state.conversation_history.append(Message(role="user", content=user_input))
@@ -187,6 +188,7 @@ class VoiceAgent:
         result = self._backend.complete(
             messages=self.state.conversation_history,
             system_prompt=self.config.system_prompt,
+            max_tokens=max_tokens,
         )
 
         # Add assistant response to history
@@ -228,10 +230,8 @@ class VoiceAgent:
 
     def _create_backend(self) -> LLMBackend:
         """Create the configured LLM backend."""
-        if self.config.llm_backend == "claude":
-            return ClaudeBackend()
-        elif self.config.llm_backend == "nicto":
-            return NICTOBackend()
+        if self.config.llm_backend == "nicto":
+            return NICTOBackend(checkpoint_path=self.config.checkpoint_path)
         elif self.config.llm_backend == "echo":
             return EchoBackend()
         else:

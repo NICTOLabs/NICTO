@@ -17,7 +17,7 @@ from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from nicto_ai.training.model_train import NICTOTrainModel, NICTOTrainConfig
+from nicto_ai.training.model_train import NICTOTrainModel, NICTOTrainConfig, nicto_5b_config
 
 
 # ============================================================
@@ -194,7 +194,7 @@ def get_lr(step, warmup_steps, total_steps, base_lr, min_lr):
 # ============================================================
 # TRAINING LOOP
 # ============================================================
-def train(config_name="colab"):
+def train(config_name="colab", data_path=None, data_mix=None, resume_from=None):
     # Config
     if config_name == "colab":
         train_config = {
@@ -238,8 +238,30 @@ def train(config_name="colab"):
             moe_experts=16, moe_activated=4, moe_hidden=8192,
             memory_layers=8, emotional_layers=8, creative_layers=8,
         )
+    elif config_name == "5b":
+        # ~5B params. Needs an A100/H100-class GPU (80GB) for full fine-tuning,
+        # or a 24GB+ GPU using LoRA/QLoRA. Will NOT fit on a free T4 (16GB).
+        train_config = {
+            "lr": 1.5e-4, "min_lr": 1e-5, "warmup": 1000, "steps": 20000,
+            "batch_size": 1, "grad_accum": 32, "save_every": 1000,
+            "eval_every": 200, "grad_clip": 1.0, "weight_decay": 0.1,
+            "seq_len": 4096, "data_path": None,
+            "data_mix": None,
+        }
+        model_config = nicto_5b_config()
     else:
         raise ValueError(f"Unknown config: {config_name}")
+
+    # Apply CLI overrides (previously parsed but silently discarded)
+    if data_path:
+        train_config["data_path"] = data_path
+    if data_mix:
+        # data_mix passed as list of "path:weight" strings -> list of (path, weight) tuples
+        parsed_mix = []
+        for item in data_mix:
+            path, weight = item.rsplit(":", 1)
+            parsed_mix.append((path, float(weight)))
+        train_config["data_mix"] = parsed_mix
 
     # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -261,6 +283,30 @@ def train(config_name="colab"):
         weight_decay=train_config["weight_decay"],
         betas=(0.9, 0.95),
     )
+
+    # Resume from checkpoint (warm start) if provided
+    start_step = 0
+    if resume_from:
+        print(f"\nResuming from checkpoint: {resume_from}")
+        ckpt = torch.load(resume_from, map_location=device)
+        missing, unexpected = model.load_state_dict(ckpt["model"], strict=False)
+        if missing:
+            print(
+                f"  Warning: {len(missing)} missing keys (architecture mismatch) - those params stay randomly initialized"
+            )
+        if unexpected:
+            print(
+                f"  Warning: {len(unexpected)} unexpected keys in checkpoint were ignored"
+            )
+        if "optimizer" in ckpt:
+            try:
+                optimizer.load_state_dict(ckpt["optimizer"])
+            except Exception as e:
+                print(
+                    f"  Could not restore optimizer state ({e}); starting optimizer fresh"
+                )
+        start_step = ckpt.get("step", 0)
+        print(f"  Resumed at step {start_step}")
 
     # Data loading
     if train_config.get("data_mix"):
@@ -300,7 +346,7 @@ def train(config_name="colab"):
     print()
 
     model.train()
-    step = 0
+    step = start_step
     epoch = 0
     total_loss = 0
     start_time = time.time()
@@ -416,15 +462,43 @@ def train(config_name="colab"):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="colab", choices=["colab", "colab_large", "k8s"])
+    parser.add_argument("--config", default="colab", choices=["colab", "colab_large", "k8s", "5b"])
     parser.add_argument("--data-path", type=str, default=None, help="Path to training data (file or directory)")
     parser.add_argument("--data-mix", type=str, nargs="+", help="Mixed datasets: path1:weight1 path2:weight2 ...")
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint (.pt) to warm-start from")
+    parser.add_argument("--use-real-data", action="store_true",
+        help="Shortcut: use the README's recommended Priority-1 mix from nicto_ai/data/processed/ "
+        "(requires running `python -m nicto_ai.data.collect --priority 1 --process` first)")
     args = parser.parse_args()
-    
-    # Override config if data paths provided
+
+    data_mix = args.data_mix
+    if args.use_real_data and not data_mix:
+        # Matches the README's "Recommended Training Mix (10B tokens)" table.
+        # Expects processed JSONL files at nicto_ai/data/processed/<name>.jsonl
+        # (produced by: python -m nicto_ai.data.collect --priority 1 --process)
+        data_mix = [
+            "fineweb-edu.jsonl:0.30",
+            "slimpajama.jsonl:0.20",
+            "wikipedia.jsonl:0.10",
+            "the_stack_python.jsonl:0.10",
+            "openhermes_2.5.jsonl:0.10",
+            "math.jsonl:0.10",
+            "ultrachat.jsonl:0.10",
+        ]
+        print(
+            "Using README's recommended Priority-1 data mix (see nicto_ai/data/collect.py to fetch these files first)"
+        )
+
     if args.data_path:
         print(f"Using data path: {args.data_path}")
-    if args.data_mix:
-        print(f"Using data mix: {args.data_mix}")
-    
-    train(args.config)
+    if data_mix:
+        print(f"Using data mix: {data_mix}")
+    if args.resume:
+        print(f"Will resume from: {args.resume}")
+
+    train(
+        args.config,
+        data_path=args.data_path,
+        data_mix=data_mix,
+        resume_from=args.resume,
+    )
