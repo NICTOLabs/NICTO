@@ -22,5 +22,8 @@ dev = [
     "ruff>=0.1.0",
 ]
 
+[project.scripts]
+nicto = "nicto_ai.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["nicto_ai*"]

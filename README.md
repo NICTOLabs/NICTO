@@ -4,7 +4,7 @@ Open-source neural architecture — reasoning, memory, emotion, and consciousnes
 
 **Status:** Undergoing training on Google Colab (T4 GPU). Current checkpoint is ~207M parameters. No benchmarks run yet.
 
-## Quick start
+## Install
 
 ```bash
 git clone https://github.com/NICTOLabs/NICTO.git
@@ -12,45 +12,22 @@ cd NICTO
 pip install -e .
 ```
 
-### Test the model
+## Commands
 
 ```bash
-python -c "
-import torch
-from nicto_ai.training.model_train import NICTOTrainModel, NICTOTrainConfig
+# Chat with NICTO
+nicto chat
 
-config = NICTOTrainConfig()
-model = NICTOTrainModel(config)
-model.load_state_dict(torch.load('nicto_model_final.pt', weights_only=True))
+# Train
+nicto train
 
-x = torch.randint(0, config.vocab_size, (1, 10))
-out = model.generate(x, max_new_tokens=50)
-print('Generated tokens:', out.shape[1] - 10)
-"
+# Show model info
+nicto info
 ```
 
-### Run the voice engine
+## How it's trained
 
-```python
-from nicto_ai.voice.backend_interface import NICTOBackend, Message
-
-backend = NICTOBackend(checkpoint_path="nicto_model_final.pt")
-result = backend.complete([Message(role="user", content="Hello")], max_tokens=50)
-print(result.text)
-```
-
-### Train
-
-```bash
-# Quick smoke test (synthetic data)
-python -m nicto_ai.training.train --config colab
-
-# With real data
-python -m nicto_ai.training.train --config colab --use-real-data
-
-# Download training datasets first
-python -m nicto_ai.data.collect --priority 1 --process
-```
+NICTO is trained on Google Colab Free (T4 16GB) using PyTorch. The training pipeline supports synthetic data and real datasets from HuggingFace.
 
 ## Architecture
 
@@ -82,14 +59,6 @@ nicto_ai/
 
 - Python 3.10+
 - PyTorch 2.0+
-- ~2GB disk for the checkpoint (Git LFS)
-
-## How it's trained
-
-NICTO is trained on Google Colab Free (T4 16GB) using PyTorch. The training pipeline supports:
-- Synthetic data (for quick testing)
-- Real datasets from HuggingFace (Wikipedia, code, reasoning)
-- Checkpoint save/resume
 
 ## License
 
