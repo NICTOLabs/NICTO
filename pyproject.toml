@@ -21,6 +21,9 @@ dev = [
     "pytest>=7.0.0",
     "ruff>=0.1.0",
 ]
+cpp = [
+    "pybind11>=2.11.0",
+]
 
 [project.scripts]
 nicto = "nicto_ai.cli:main"
