@@ -238,49 +238,42 @@ class NICTOBackend(LLMBackend):
             )
 
         import torch
+        from nicto_ai.engine import fast_encode_tensor, fast_decode_tensor, find_stop_token, fast_generate
 
         prompt = self._build_prompt(messages, system_prompt)
-
-        # Tokenize using byte-level encoding (same as training)
         config = self._model.config
-        tokens = [b % config.vocab_size for b in prompt.encode("utf-8")]
 
-        if not tokens:
+        # Fast encode: text -> tensor directly (no Python list)
+        input_ids = fast_encode_tensor(prompt, config.vocab_size, str(self._device))
+
+        if input_ids.numel() == 0:
             return CompletionResult(text="", finish_reason="empty")
 
-        input_ids = torch.tensor([tokens], dtype=torch.long, device=self._device)
+        input_ids = input_ids.unsqueeze(0)  # [1, seq_len]
 
-        # Generate
-        with torch.no_grad():
-            output = self._model.generate(
-                input_ids,
-                max_new_tokens=max_tokens,
-                temperature=temperature,
-                top_k=50,
-            )
+        # Fast generation with pre-allocated buffer
+        output = fast_generate(
+            self._model,
+            input_ids,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+            top_k=50,
+        )
 
-        # Decode only new tokens
-        new_tokens = output[0][input_ids.shape[1]:].cpu().tolist()
+        # Fast decode: tensor -> text directly
+        new_tokens = output[0][input_ids.shape[1]:]
+        text = fast_decode_tensor(new_tokens)
 
-        # Convert tokens back to text (byte-level decoding)
-        text_bytes = bytes([t % 256 for t in new_tokens])
-        try:
-            text = text_bytes.decode("utf-8", errors="replace")
-        except Exception:
-            text = str(new_tokens)
-
-        # Clean up - remove garbage after natural stop
-        for stop_token in ["\n\n", "Assistant:", "User:", "System:"]:
-            idx = text.find(stop_token)
-            if idx > 0:
-                text = text[:idx].strip()
-                break
+        # Stop token cleanup
+        stop_pos = find_stop_token(text)
+        if stop_pos > 0:
+            text = text[:stop_pos].strip()
 
         return CompletionResult(
             text=text.strip(),
             model=self.name,
             usage={
-                "prompt_tokens": len(tokens),
+                "prompt_tokens": input_ids.shape[1],
                 "completion_tokens": len(new_tokens),
             },
         )

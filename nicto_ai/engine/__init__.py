@@ -3,33 +3,22 @@ NICTO AI - Fast Engines
 
 Provides optimized C++ and Python implementations for:
 - Byte-level tokenizer (encode/decode)
-- Mixture of Experts (fused routing + expert forward)
-- Autoregressive generation (pre-allocated buffer + fused sampling)
-- SSM/Liquid parallel scan
+- Token sampler (top-k + softmax + multinomial)
+- Autoregressive generation (pre-allocated buffer)
 
-Usage:
-    from nicto_ai.engine import fast_encode, fast_decode, fused_moe_forward, fast_generate
+The C++ engine is loaded if available (10-50x faster).
+Otherwise, the Python fallback is used.
 
-The C++ engine is loaded if available (faster). Otherwise, the Python
-fallback is used (still significantly faster than the original code).
+To build the C++ engine:
+    python -m nicto_ai.engine.build_cpp
 """
 
-import os
-
-# Try to load C++ engine
 _cpp_available = False
+_cpp_module = None
+
+# Try to import C++ engine
 try:
-    from nicto_ai.engine.nicto_engine import (
-        fast_encode as cpp_fast_encode,
-        fast_decode as cpp_fast_decode,
-        fast_batch_encode,
-        find_stop_token as cpp_find_stop_token,
-        fused_topk as cpp_fused_topk,
-        compute_load_balance_loss as cpp_compute_load_balance_loss,
-        fused_sample as cpp_fused_sample,
-        selective_scan as cpp_selective_scan,
-        liquid_neuron_scan as cpp_liquid_neuron_scan,
-    )
+    from nicto_ai.engine import nicto_engine as _cpp_module
     _cpp_available = True
 except ImportError:
     pass
@@ -41,28 +30,56 @@ from nicto_ai.engine.fast_ops import (
     fast_encode_tensor,
     fast_decode_tensor,
     find_stop_token,
+    fused_sample,
     fused_topk_routing,
     fused_moe_forward,
-    fused_sample,
     fast_generate,
     vectorized_selective_scan,
 )
 
 
 def has_cpp_engine() -> bool:
-    """Check if C++ engine is available."""
+    """Check if C++ engine is loaded."""
     return _cpp_available
 
 
-# Use C++ versions if available, otherwise Python
-if _cpp_available:
-    encode = cpp_fast_encode
-    decode = cpp_fast_decode
-    sample = cpp_fused_sample
-else:
-    encode = fast_encode
-    decode = fast_decode
-    sample = fused_sample
+# ============================================================
+# Unified API: use C++ if available, else Python
+# ============================================================
+
+def encode(text, vocab_size=32000):
+    """UTF-8 text -> token IDs."""
+    if _cpp_available:
+        return _cpp_module.encode(text, vocab_size)
+    return fast_encode(text, vocab_size)
+
+
+def decode(tokens):
+    """Token IDs -> UTF-8 text."""
+    if _cpp_available:
+        if isinstance(tokens, list):
+            return _cpp_module.decode(tokens)
+        return _cpp_module.decode(tokens.tolist())
+    return fast_decode(tokens)
+
+
+def sample(logits, temperature=0.8, top_k=50):
+    """Fused top-k + softmax + multinomial sample."""
+    if _cpp_available:
+        import torch
+        if isinstance(logits, torch.Tensor):
+            logits = logits.detach().cpu().tolist()
+        if isinstance(logits, list):
+            return _cpp_module.sample(logits, len(logits), temperature, top_k)
+        return _cpp_module.sample(list(logits), len(logits), temperature, top_k)
+    return fused_sample(logits, temperature, top_k)
+
+
+def find_stop(text):
+    """Find stop token position. Returns -1 if not found."""
+    if _cpp_available:
+        return _cpp_module.find_stop(text)
+    return find_stop_token(text)
 
 
 __all__ = [
@@ -70,14 +87,15 @@ __all__ = [
     "encode",
     "decode",
     "sample",
+    "find_stop",
     "fast_encode",
     "fast_decode",
     "fast_encode_tensor",
     "fast_decode_tensor",
     "find_stop_token",
+    "fused_sample",
     "fused_topk_routing",
     "fused_moe_forward",
-    "fused_sample",
     "fast_generate",
     "vectorized_selective_scan",
 ]
