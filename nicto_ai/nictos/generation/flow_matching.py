@@ -183,8 +183,8 @@ class DiTBlock(nn.Module):
         gate2: torch.Tensor,
     ) -> torch.Tensor:
         # AdaLN-modulated self-attention (norm inside self_attn)
-        h = self.norm1(x) * (1 + scale1) + shift1
-        x = x + gate1 * self.self_attn._forward_raw(h)
+        h = self.norm1(x) * (1 + scale1.unsqueeze(1)) + shift1.unsqueeze(1)
+        x = x + gate1.unsqueeze(1) * self.self_attn._forward_raw(h)
 
         # Cross-attention (norms inside cross_attn)
         x = x + self.cross_attn(x, context)

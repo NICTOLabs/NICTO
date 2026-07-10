@@ -74,9 +74,9 @@ class TemporalAttention(nn.Module):
         q, k, v = qkv.permute(3, 0, 4, 1, 2, 5).unbind(0)
 
         # Reshape for temporal attention (attend across time for each spatial position)
-        q = q.permute(0, 2, 1, 3).reshape(B * L, T, self.head_dim * self.num_heads)
-        k = k.permute(0, 2, 1, 3).reshape(B * L, T, self.head_dim * self.num_heads)
-        v = v.permute(0, 2, 1, 3).reshape(B * L, T, self.head_dim * self.num_heads)
+        q = q.permute(0, 3, 2, 1, 4).reshape(B * L, T, self.head_dim * self.num_heads)
+        k = k.permute(0, 3, 2, 1, 4).reshape(B * L, T, self.head_dim * self.num_heads)
+        v = v.permute(0, 3, 2, 1, 4).reshape(B * L, T, self.head_dim * self.num_heads)
 
         attn = F.scaled_dot_product_attention(q, k, v)
         attn = attn.reshape(B, L, T, C).permute(0, 2, 1, 3)
@@ -317,10 +317,12 @@ class VideoGenerator(nn.Module):
             for _ in range(num_layers)
         ])
 
-        # Output projection
-        self.output_norm = nn.LayerNorm(hidden_dim)
-        self.output_proj = nn.Linear(hidden_dim, latent_dim)
-        self.final_conv = nn.Conv3d(latent_dim, latent_dim, 1)
+        # Output projection (all Conv3d-based, no permutes needed)
+        self.output_conv = nn.Sequential(
+            nn.GroupNorm(min(8, hidden_dim), hidden_dim),
+            nn.SiLU(),
+            nn.Conv3d(hidden_dim, latent_dim, 1),
+        )
 
         # Audio-video sync module
         self.av_sync = nn.Sequential(
@@ -421,10 +423,9 @@ class VideoGenerator(nn.Module):
             for block in self.blocks:
                 h = block(h, context, t_emb)
 
-            # Unpatchify and project
-            h = self._unpatchify(h, latent_T, latent_H, latent_W)
-            v = self.final_conv(self.output_norm(h.mean(dim=1).permute(0, 2, 3, 4)))
-            v = self.output_proj(v.permute(0, 3, 1, 2))  # Back to latent space
+            # Unpatchify and project to velocity
+            h_5d = self._unpatchify(h, latent_T, latent_H, latent_W)
+            v = self.output_conv(h_5d)
 
             # CFG
             if cfg_scale > 1.0:
@@ -433,9 +434,8 @@ class VideoGenerator(nn.Module):
                 h_uncond = self._patchify(z)
                 for block in self.blocks:
                     h_uncond = block(h_uncond, uncond_context, t_emb)
-                h_uncond = self._unpatchify(h_uncond, latent_T, latent_H, latent_W)
-                v_uncond = self.final_conv(self.output_norm(h_uncond.mean(dim=1).permute(0, 2, 3, 4)))
-                v_uncond = self.output_proj(v_uncond.permute(0, 3, 1, 2))
+                h_uncond_5d = self._unpatchify(h_uncond, latent_T, latent_H, latent_W)
+                v_uncond = self.output_conv(h_uncond_5d)
 
                 v = v_uncond + cfg_scale * (v - v_uncond)
 
