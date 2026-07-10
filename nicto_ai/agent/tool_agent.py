@@ -176,6 +176,31 @@ class ToolAgent:
                 "method": r"(GET|POST|PUT|DELETE|PATCH)",
             },
         },
+        {
+            "keywords": ["knowledge base", "what do you know", "kb", "crawl", "search knowledge", "query knowledge"],
+            "tool": "knowledge_query",
+            "params": {
+                "query": r"(?:about|on|for)\s+([^.,!?]+)",
+                "source_filter": r"(web|document|manual)",
+            },
+        },
+        {
+            "keywords": ["search", "search web", "find online", "look up", "google", "bing", "internet search", "browse web"],
+            "tool": "web_search",
+            "params": {
+                "query": r"(?:for|about|on)\s+([^.,!?]+)",
+                "engine": r"(bing|google|duckduckgo)",
+            },
+        },
+        {
+            "keywords": ["simulate", "simulation", "hydrogen atom", "three body", "n-body", "n body",
+                         "predator prey", "lotka volterra", "epidemiology", "sir model",
+                         "run simulation", "physics sim", "particle sim"],
+            "tool": "simulator",
+            "params": {
+                "query": r"simulate\s+(?:a\s+|an\s+)?(.+)",
+            },
+        },
     ]
 
     def __init__(self, registry: ToolRegistry):
@@ -282,6 +307,28 @@ class ToolAgent:
                 url_match = re.search(r'https?://[^\s,]+', text)
                 if url_match:
                     params["url"] = url_match.group()
+
+            # For web_search, extract query from remaining text
+            if tool_name == "web_search" and "query" not in params:
+                q = text
+                for prefix in ["search the web for", "search web for", "search internet for", "search for",
+                               "search the internet for", "search online for", "search", "look up",
+                               "find online", "google", "bing", "browse web for", "browse"]:
+                    if q.lower().startswith(prefix):
+                        q = q[len(prefix):].strip().lstrip(":,. ")
+                        break
+                params["query"] = q
+
+            # For knowledge_query, extract query from remaining text
+            if tool_name == "knowledge_query" and "query" not in params:
+                q = text
+                for prefix in ["what do you know about", "knowledge about", "tell me about",
+                               "know about", "knowledge base for", "kb about", "kb for",
+                               "search knowledge for", "query knowledge about"]:
+                    if q.lower().startswith(prefix):
+                        q = q[len(prefix):].strip().lstrip(":,. ")
+                        break
+                params["query"] = q
 
             self._convert_param_types(tool, params)
             result = tool.execute(**params)
@@ -547,11 +594,61 @@ class ToolAgent:
             data = result.output
             return f"**Translation to {data['target_language']}**\n\nOriginal: {data['original']}"
 
+        if tool_name == "web_search":
+            data = result.output
+            if isinstance(data, dict):
+                data = [data]
+            lines = [f"**Search Results for: {result.metadata.get('query', '')}**\n"]
+            for r in data[:10]:
+                lines.append(f"- **{r['title']}**")
+                lines.append(f"  URL: {r['url']}")
+                if r.get('snippet'):
+                    lines.append(f"  _{r['snippet']}_")
+                lines.append("")
+            return "\n".join(lines)
+
+        if tool_name == "knowledge_query":
+            data = result.output
+            if isinstance(data, dict):
+                data = [data]
+            if not data:
+                return "**Knowledge Base**: No results found."
+            lines = [f"**Knowledge Results**\n"]
+            for r in data[:10]:
+                lines.append(f"- **{r['title']}** (score: {r['score']:.3f})")
+                if r.get('url'):
+                    lines.append(f"  URL: {r['url']}")
+                if r.get('summary'):
+                    lines.append(f"  _{r['summary'][:200]}_")
+                lines.append("")
+            return "\n".join(lines)
+
         if tool_name == "api_caller":
             data = result.output
             body = data.get("body", {})
             return f"**HTTP {data['status_code']} {data['status_text']}**\n" + \
                    (f"```json\n{body}\n```" if body else "")
+
+        if tool_name == "simulator":
+            data = result.output
+            lines = [f"**{data['simulation']}**"]
+            lines.append(f"Steps: {data.get('steps', 0)} | Final time: {data.get('final_time', 0):.4e}")
+            if data.get("energy") is not None:
+                lines.append(f"Total energy: {data['energy']:.4e}")
+            if data.get("temperature") is not None:
+                lines.append(f"Temperature: {data['temperature']:.2f} K")
+            if data.get("stocks"):
+                lines.append("")
+                for s in data["stocks"]:
+                    lines.append(f"- {s['name']}: {s['value']:.2f}")
+            elif data.get("entities"):
+                lines.append("")
+                for e in data["entities"][:10]:
+                    pos_str = f"pos=[{e['position'][0]:.4e}, {e['position'][1]:.4e}, {e['position'][2]:.4e}]" if "position" in e else ""
+                    vel_str = f" vel=[{e['velocity'][0]:.4e}, ..]" if "velocity" in e else ""
+                    val_str = f" value={e['value']:.4e}" if "value" in e else ""
+                    lines.append(f"- Entity #{e['id']} ({e['type']}): {pos_str}{vel_str}{val_str}")
+            return "\n".join(lines)
 
         # Generic fallback for any tool
         out = result.output

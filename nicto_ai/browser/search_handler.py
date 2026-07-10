@@ -39,23 +39,45 @@ class SearchHandler:
     """
     Handles web searches through multiple search engines.
 
-    Uses the BrowserEngine to perform actual searches, then
-    parses results into structured SearchResponse objects.
+    Uses HTTP requests (via requests library or BrowserEngine)
+    to perform searches and parse results.
     """
 
     def __init__(self, browser: BrowserEngine, parser: Optional[PageParser] = None):
         self.browser = browser
         self.parser = parser or PageParser()
 
+    def _http_search(self, url: str, engine: str) -> str:
+        """Fetch a search URL via HTTP with TLS fingerprint impersonation."""
+        from curl_cffi import requests as curl_requests
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "DNT": "1",
+        }
+
+        resp = curl_requests.get(url, headers=headers, impersonate="chrome131", timeout=15)
+        resp.raise_for_status()
+        return resp.text
+
     async def search(
         self,
         query: str,
-        engine: str = "bing",
+        engine: str = "duckduckgo",
         max_results: int = 10,
         fetch_content: bool = False,
     ) -> SearchResponse:
         """
         Perform a web search and extract results.
+
+        Uses HTTP requests for search engines that support it (ddg lite, bing),
+        falls back to headless browser for others.
 
         Args:
             query: Search query
@@ -69,34 +91,36 @@ class SearchHandler:
         import time
         start = time.time()
 
-        # Build search URL
+        # Build search URLs
         urls = {
-            "duckduckgo": f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}",
-            "google": f"https://www.google.com/search?q={query.replace(' ', '+')}",
-            "bing": f"https://www.bing.com/search?q={query.replace(' ', '+')}",
+            "bing": f"https://www.bing.com/search?q={query.replace(' ', '+')}&count={max_results}",
+            "duckduckgo": f"https://lite.duckduckgo.com/lite/?q={query.replace(' ', '+')}",
         }
-        url = urls.get(engine, urls["duckduckgo"])
 
-        # Navigate to search engine
-        page_info = await self.browser.navigate(url)
-        parsed = self.parser.parse_html(page_info.html, page_info.url)
-        # Use raw text content for JS-rendered search results
-        parsed.main_text = page_info.text_content
+        results = []
 
-        # Extract search results from the parsed content
-        results = self._extract_search_results(parsed, engine)
-
-        # Optionally fetch full content for each result
-        if fetch_content:
-            for result in results[:max_results]:
-                try:
-                    result_page = await self.browser.navigate(result.url)
-                    result.content = self.parser.parse_html(result_page.html, result.url)
-                except Exception as e:
-                    logger.warning("Failed to fetch %s: %s", result.url, e)
+        # Try HTTP-based search first (uses curl_cffi for TLS fingerprint impersonation)
+        engines_to_try = [engine] if engine in urls else ["bing", "duckduckgo"]
+        for eng in engines_to_try:
+            url = urls.get(eng)
+            if not url:
+                continue
+            try:
+                html = await asyncio.get_event_loop().run_in_executor(
+                    None, self._http_search, url, eng
+                )
+                parsed = self.parser.parse_html(html, url)
+                # Store raw HTML for extractors that need it (e.g., Bing)
+                parsed.metadata["_raw_html"] = html
+                extracted = self._extract_search_results(parsed, eng)
+                if extracted:
+                    results = extracted
+                    engine = eng
+                    break
+            except Exception as e:
+                logger.debug("HTTP search on %s failed: %s", eng, e)
 
         elapsed = (time.time() - start) * 1000
-
         return SearchResponse(
             query=query,
             engine=engine,
@@ -221,21 +245,30 @@ class SearchHandler:
         return results
 
     def _extract_ddg_results(self, parsed: ParsedContent) -> List[SearchResult]:
-        """Extract results from DuckDuckGo."""
+        """Extract results from DuckDuckGo (Lite version)."""
+        from bs4 import BeautifulSoup
         results = []
-        # DDG results are in links with specific patterns
+        seen_urls = set()
+
+        # For DDG Lite, results are in anchor tags with rel="nofollow"
         for link in parsed.links:
             href = link.get("href", "")
-            text = link.get("text", "")
-            # Skip DDG internal links
+            text = link.get("text", "").strip()
+            # Skip DDG internal links and non-http links
             if "duckduckgo.com" in href or not href.startswith("http"):
                 continue
-            if len(text) > 10:
-                results.append(SearchResult(
-                    title=text[:100],
-                    url=href,
-                    snippet="",
-                ))
+            if href in seen_urls:
+                continue
+            if not text or len(text) < 2:
+                continue
+            seen_urls.add(href)
+            results.append(SearchResult(
+                title=text[:120],
+                url=href,
+                snippet="",
+            ))
+
+        # Deduplicate by URL
         return results
 
     def _extract_google_results(self, parsed: ParsedContent) -> List[SearchResult]:
@@ -255,43 +288,51 @@ class SearchHandler:
         return results
 
     def _extract_bing_results(self, parsed: ParsedContent) -> List[SearchResult]:
-        """Extract results from Bing (text contains domain + URL + title pattern)."""
+        """Extract results from Bing using BeautifulSoup to find actual result URLs."""
+        from bs4 import BeautifulSoup
         import re
+
         results = []
-        url_pattern = re.compile(r'^https?://[^\s]+$')
-        lines = [l.strip() for l in parsed.main_text.split("\n") if l.strip()]
-
         seen_urls = set()
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            # Look for URL on its own line
-            if url_pattern.match(line):
-                url = line
-                # Skip bing/microsoft internal URLs
-                if "bing.com" in url or "microsoft.com" in url:
-                    i += 1
-                    continue
-                if url in seen_urls:
-                    i += 1
-                    continue
-                seen_urls.add(url)
 
-                # Title is the line before the URL (if not a URL itself)
-                title = ""
-                if i > 0 and not url_pattern.match(lines[i - 1]):
-                    title = lines[i - 1]
+        # Re-parse from raw HTML for proper element structure
+        raw_html = ""
+        if isinstance(parsed.metadata, dict):
+            raw_html = parsed.metadata.get("_raw_html", "")
+        soup = BeautifulSoup(raw_html, "html.parser") if raw_html else None
 
-                # Snippet is the line after the URL (if not a URL)
-                snippet = ""
-                if i + 1 < len(lines) and not url_pattern.match(lines[i + 1]):
-                    snippet = lines[i + 1]
+        # Find tilk-class links (these contain the embedded real URL in their text)
+        for a_tag in (soup.find_all("a", class_="tilk") if soup else []):
+            text = a_tag.get_text(strip=True)
+            # Real URL is embedded in text: "domainhttps://real.url/path"
+            url_match = re.search(r'https?://[^\s\u00A0<>]+', text)
+            if not url_match:
+                continue
+            url = url_match.group()
+            if url in seen_urls or "bing.com" in url or "microsoft.com" in url:
+                continue
+            seen_urls.add(url)
 
-                results.append(SearchResult(
-                    title=title[:100],
-                    url=url,
-                    snippet=snippet[:200],
-                ))
-            i += 1
+            # Title comes from h2 parent
+            h2 = a_tag.find_parent("h2")
+            title = h2.get_text(strip=True) if h2 else text.split("https://")[0].strip()
+            # Clean title
+            title = re.sub(r'\s+', ' ', title).strip()[:120]
+
+            results.append(SearchResult(title=title, url=url, snippet=""))
+
+        if not results and parsed.links:
+            # Fallback: find URLs embedded in link text
+            for link in parsed.links:
+                text = link.get("text", "").strip()
+                url_match = re.search(r'https?://[^\s\u00A0<>]+', text)
+                if url_match:
+                    url = url_match.group()
+                    if url in seen_urls or "bing.com" in url or "microsoft.com" in url:
+                        continue
+                    seen_urls.add(url)
+                    title = text.split("https://")[0].strip()
+                    title = re.sub(r'\s+', ' ', title).strip()[:120]
+                    results.append(SearchResult(title=title or url, url=url, snippet=""))
 
         return results

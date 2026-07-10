@@ -7,6 +7,7 @@ from .math_engine import MathEngineTool
 from .data_analysis import DataAnalysisTool
 from .translator import TranslatorTool
 from .knowledge_tool import KnowledgeTool
+from .simulation_tool import SimulationTool
 from .calculator import CalculatorTool
 from .shell import ShellTool
 from .content_writer import ContentWriterTool
@@ -31,8 +32,9 @@ __all__ = [
     "ContentWriterTool", "SummarizerTool", "CodeReviewTool",
     "TextAnalyzerTool", "RegexBuilderTool", "JsonBuilderTool",
     "MarkdownBuilderTool", "UnitTestGeneratorTool", "ApiCallerTool",
-    "PasswordGeneratorTool", "HashTool", "ColorPaletteTool",
+    "PasswordGeneratorTool", "HashTool",     "ColorPaletteTool",
     "TextToSQLTool",
+    "SimulationTool",
 ]
 
 
@@ -62,7 +64,7 @@ def create_default_registry(browser=None, knowledge_base=None) -> ToolRegistry:
     registry.register(FileManagerTool(), category="file")
 
     # Knowledge tools
-    registry.register(WebSearchTool(browser=browser), category="knowledge")
+    registry.register(WebSearchTool(), category="knowledge")
     registry.register(KnowledgeTool(knowledge_base=knowledge_base), category="knowledge")
 
     # Data tools
@@ -89,6 +91,9 @@ def create_default_registry(browser=None, knowledge_base=None) -> ToolRegistry:
 
     # Testing tools
     registry.register(UnitTestGeneratorTool(), category="testing")
+
+    # Simulation tool
+    registry.register(SimulationTool(), category="simulation")
 
     return registry
 

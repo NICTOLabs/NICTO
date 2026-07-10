@@ -18,7 +18,7 @@ class ParsedContent:
     paragraphs: List[str] = field(default_factory=list)
     links: List[Dict[str, str]] = field(default_factory=list)
     code_blocks: List[str] = field(default_factory=list)
-    metadata: Dict[str, str] = field(default_factory=list)
+    metadata: Dict[str, str] = field(default_factory=dict)
     word_count: int = 0
     relevance_score: float = 0.0
 

@@ -61,6 +61,7 @@ class NICTOBrowser:
         self.parser: PageParser = PageParser()
         self.search_handler: Optional[SearchHandler] = None
         self._browse_history: List[BrowseResult] = []
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def start(
         self,
@@ -141,7 +142,7 @@ class NICTOBrowser:
     async def search(
         self,
         query: str,
-        engine: str = "bing",
+        engine: str = "duckduckgo",
         max_results: int = 10,
         fetch_content: bool = True,
     ) -> List[SearchResult]:
@@ -172,6 +173,58 @@ class NICTOBrowser:
             ))
 
         return response.results
+
+    # ── Synchronous wrappers for tool use ──────────────────────────
+
+    @property
+    def _event_loop(self) -> asyncio.AbstractEventLoop:
+        """Get or create a persistent event loop."""
+        if self._loop is None or self._loop.is_closed():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        return self._loop
+
+    def start_sync(
+        self,
+        tor: bool = False,
+        headless: bool = True,
+        proxy: str = None,
+    ):
+        """Synchronous wrapper around start()."""
+        loop = self._event_loop
+        return loop.run_until_complete(self.start(tor=tor, headless=headless, proxy=proxy))
+
+    def stop_sync(self):
+        """Synchronous wrapper around stop()."""
+        try:
+            loop = self._event_loop
+            result = loop.run_until_complete(self.stop())
+            if self._loop and not self._loop.is_closed():
+                self._loop.close()
+            self._loop = None
+            return result
+        except Exception:
+            if self._loop and not self._loop.is_closed():
+                self._loop.close()
+            self._loop = None
+
+    def search_sync(
+        self,
+        query: str,
+        engine: str = "bing",
+        max_results: int = 10,
+        fetch_content: bool = True,
+    ) -> list:
+        """Synchronous wrapper around search()."""
+        loop = self._event_loop
+        return loop.run_until_complete(
+            self.search(query, engine=engine, max_results=max_results, fetch_content=fetch_content)
+        )
+
+    def browse_sync(self, url: str) -> BrowseResult:
+        """Synchronous wrapper around browse()."""
+        loop = self._event_loop
+        return loop.run_until_complete(self.browse(url))
 
     async def deep_search(
         self,

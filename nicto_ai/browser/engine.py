@@ -94,13 +94,18 @@ class BrowserEngine:
         self._page = await self._context.new_page()
         self._page.set_default_timeout(self.timeout_ms)
 
-        # Anti-detection: override navigator.webdriver
-        await self._page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-            window.chrome = {runtime: {}};
-        """)
+        # Apply stealth patches to avoid bot detection
+        try:
+            from playwright_stealth import stealth_async
+            await stealth_async(self._page)
+        except ImportError:
+            # Fallback: basic anti-detection
+            await self._page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                window.chrome = {runtime: {}};
+            """)
 
         logger.info("Browser engine started (headless=%s, proxy=%s)", self.headless, self.proxy)
 
@@ -127,6 +132,14 @@ class BrowserEngine:
         import time
         start = time.time()
 
+        # Navigate to blank first to ensure clean page state
+        try:
+            current = self._page.url
+            if current not in ("about:blank", ""):
+                await self._page.goto("about:blank", wait_until="domcontentloaded", timeout=3000)
+        except Exception:
+            pass
+
         response = await self._page.goto(url, wait_until="domcontentloaded")
         load_time = (time.time() - start) * 1000
 
@@ -152,7 +165,7 @@ class BrowserEngine:
             PageInfo with search results
         """
         urls = {
-            "duckduckgo": f"https://duckduckgo.com/?q={query.replace(' ', '+')}",
+            "duckduckgo": f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}",
             "google": f"https://www.google.com/search?q={query.replace(' ', '+')}",
             "bing": f"https://www.bing.com/search?q={query.replace(' ', '+')}",
         }
@@ -205,11 +218,59 @@ class BrowserEngine:
         """Clear all cookies."""
         await self._context.clear_cookies()
 
-    async def new_page(self) -> "BrowserEngine":
-        """Create a new tab in the same browser context."""
-        new_page = await self._context.new_page()
-        new_page.set_default_timeout(self.timeout_ms)
-        return new_page
+    async def new_page(self):
+        """Create a new tab in the same browser context and return the page object."""
+        page = await self._context.new_page()
+        page.set_default_timeout(self.timeout_ms)
+        return page
+
+    async def search_on_fresh_page(self, url: str) -> PageInfo:
+        """Navigate to a URL on a fresh page, then restore the main page."""
+        import time
+        start = time.time()
+
+        fresh_page = await self._context.new_page()
+        fresh_page.set_default_timeout(self.timeout_ms)
+
+        # Apply stealth to fresh page too
+        try:
+            from playwright_stealth import stealth_async
+            await stealth_async(fresh_page)
+        except ImportError:
+            pass
+
+        try:
+            response = await fresh_page.goto(url, wait_until="domcontentloaded")
+            try:
+                await fresh_page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+
+            # Extract info from fresh page
+            title = await fresh_page.title()
+            text = await fresh_page.inner_text("body")
+            html = await fresh_page.content()
+
+            links = await fresh_page.evaluate("""
+                () => Array.from(document.querySelectorAll('a[href]')).map(a => ({
+                    text: a.innerText.trim(),
+                    href: a.href,
+                })).filter(l => l.text.length > 0)
+            """)
+
+            load_time = (time.time() - start) * 1000
+
+            return PageInfo(
+                url=fresh_page.url,
+                title=title,
+                text_content=text,
+                html=html,
+                links=links,
+                status_code=response.status if response else 200,
+                load_time_ms=load_time,
+            )
+        finally:
+            await fresh_page.close()
 
     async def _extract_page_info(self, status_code: int, load_time: float) -> PageInfo:
         """Extract structured info from the current page."""
