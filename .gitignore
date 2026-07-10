@@ -1,27 +1,23 @@
+# Build artifacts
+*.obj
+*.exp
+*.lib
+*.pyd
+build/
+
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.egg-info/
 dist/
-build/
-.eggs/
 *.egg
-.venv/
-venv/
-env/
-.env
-*.pt
-!nicto_model_final.pt
-*.pkl
-*.pth
-checkpoints/
-training-runs/
-wandb/
-*.log
-.DS_Store
-Thumbs.db
-.idea/
+
+# Environment
 .vscode/
-*.swp
-*.swo
-*~
+.idea/
+*.suo
+*.user
+
+# OS
+Thumbs.db
+.DS_Store
