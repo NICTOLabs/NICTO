@@ -1,10 +1,11 @@
 """
 NICTO AI - Voice Agent Loop
-Orchestrates: transcribe -> LLM -> parse actions -> execute -> speak
+Orchestrates: transcribe -> LLM/tools -> parse actions -> execute -> speak
 
 This is the main voice interaction loop that ties together:
 - Speech-to-Text (transcribe user's voice)
-- LLM Backend (generate response)
+- Tool Agent (detect intent, invoke tools)
+- LLM Backend (generate response if no tool matches)
 - Action Parser (detect code blocks, tool calls)
 - Executor (run code in sandbox)
 - Text-to-Speech (speak the response)
@@ -85,7 +86,7 @@ class VoiceAgent:
         """
         Args:
             config: Agent configuration
-            tools: ToolRegistry instance for tool use
+            tools: ToolRegistry or ToolAgent instance for tool use
         """
         self.config = config or AgentConfig()
         self.state = AgentState()
@@ -98,6 +99,15 @@ class VoiceAgent:
 
         # LLM backend
         self._backend = self._create_backend()
+
+        # Tool agent
+        self._tool_agent = None
+        if tools is not None:
+            from nicto_ai.agent import ToolAgent
+            if isinstance(tools, ToolAgent):
+                self._tool_agent = tools
+            else:
+                self._tool_agent = ToolAgent(tools)
 
         # Callbacks for UI integration
         self.on_transcription: Optional[Callable] = None
@@ -177,6 +187,23 @@ class VoiceAgent:
 
     def _generate_response(self, user_input: str, max_tokens: int = 128) -> str:
         """Generate LLM response from user input."""
+        # Try tool agent first
+        if self.config.enable_tool_use and self._tool_agent:
+            tool_resp = self._tool_agent.process(user_input)
+            if tool_resp and tool_resp.success:
+                # Add user message to history
+                self.state.conversation_history.append(Message(role="user", content=user_input))
+                # Build tool result as assistant response
+                result_text = tool_resp.text
+                self.state.conversation_history.append(
+                    Message(role="assistant", content=result_text, metadata={"tool": tool_resp.tool_name})
+                )
+                # Trim history
+                if len(self.state.conversation_history) > self.config.max_history:
+                    self.state.conversation_history = self.state.conversation_history[-self.config.max_history:]
+                return result_text
+
+        # Fall back to LLM backend
         # Add user message to history
         self.state.conversation_history.append(Message(role="user", content=user_input))
 

@@ -40,7 +40,9 @@ class CalculatorTool(Tool):
 
     def _execute(self, expression: str) -> ToolResult:
         try:
-            result = eval(expression, {"__builtins__": {}}, self.SAFE_FUNCTIONS)
+            # Replace ^ with ** for exponent (Python uses ** not ^)
+            expr = expression.replace("^", "**")
+            result = eval(expr, {"__builtins__": {}}, self.SAFE_FUNCTIONS)
             return ToolResult(
                 success=True,
                 output={
