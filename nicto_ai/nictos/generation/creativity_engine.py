@@ -338,196 +338,6 @@ class ConceptBlending(nn.Module):
 
 
 # ==============================================================================
-# Creativity Engine
-# ==============================================================================
-
-class CreativityEngine(nn.Module):
-    """Main creativity engine combining all modules.
-
-    Handles cross-modal consistency, in-context generation,
-    style transfer, and concept blending.
-
-    Usage:
-        engine = CreativityEngine()
-
-        # Generate consistent content
-        z_image = vae.encode(image, "image")
-        z_video = engine.generate_consistent(
-            z_image, "video", vae
-        )
-
-        # Transfer style
-        z_stylized = engine.transfer_style(
-            z_image, z_painting
-        )
-
-        # Blend concepts
-        z_blended = engine.blend_concepts(
-            z_cat, z_piano, "text", "audio"
-        )
-    """
-
-    def __init__(self, latent_dim: int = 512, hidden_dim: int = 1024):
-        super().__init__()
-
-        self.consistency = CrossModalConsistency(latent_dim, hidden_dim)
-        self.in_context = InContextGeneration(latent_dim, hidden_dim)
-        self.style_transfer = StyleTransfer(latent_dim, hidden_dim)
-        self.concept_blending = ConceptBlending(latent_dim, hidden_dim)
-        self.inspiration_loop = InspirationFeedbackLoop(latent_dim, hidden_dim)
-
-        # Memory for in-context generation
-        self.memory: List[torch.Tensor] = []
-
-    def generate_consistent(
-        self,
-        z_reference: torch.Tensor,
-        target_modality: str,
-        source_modality: str,
-    ) -> torch.Tensor:
-        """Generate content consistent with reference.
-
-        Args:
-            z_reference: (B, latent_dim) reference latent
-            target_modality: Target modality
-            source_modality: Source modality
-
-        Returns:
-            (B, latent_dim) consistent latent
-        """
-        # Add to memory
-        self.memory.append(z_reference.detach())
-
-        # Generate using in-context module
-        z_current = torch.randn_like(z_reference)
-        z_new = self.in_context(z_current, self.memory, target_modality)
-
-        return z_new
-
-    def transfer_style(
-        self,
-        z_content: torch.Tensor,
-        z_style: torch.Tensor,
-    ) -> torch.Tensor:
-        """Transfer style between modalities.
-
-        Args:
-            z_content: (B, latent_dim) content latent
-            z_style: (B, latent_dim) style latent
-
-        Returns:
-            (B, latent_dim) stylized latent
-        """
-        return self.style_transfer(z_content, z_style)
-
-    def blend_concepts(
-        self,
-        z1: torch.Tensor,
-        z2: torch.Tensor,
-        modality1: str,
-        modality2: str,
-        blend_ratio: float = 0.5,
-    ) -> torch.Tensor:
-        """Blend concepts from different modalities.
-
-        Args:
-            z1: (B, latent_dim) first concept
-            z2: (B, latent_dim) second concept
-            modality1: Modality of first concept
-            modality2: Modality of second concept
-            blend_ratio: Ratio of blending
-
-        Returns:
-            (B, latent_dim) blended concept
-        """
-        return self.concept_blending(z1, z2, modality1, modality2, blend_ratio)
-
-    def check_consistency(
-        self,
-        z1: torch.Tensor,
-        z2: torch.Tensor,
-        modality1: str,
-        modality2: str,
-    ) -> torch.Tensor:
-        """Check consistency between two latents.
-
-        Args:
-            z1: (B, latent_dim) first latent
-            z2: (B, latent_dim) second latent
-            modality1: Modality of first latent
-            modality2: Modality of second latent
-
-        Returns:
-            (B,) consistency scores in [0, 1]
-        """
-        return self.consistency(z1, z2, modality1, modality2)
-
-    def validate_and_inspire(
-        self,
-        z_created: torch.Tensor,
-        z_target: torch.Tensor,
-        modality: str = "image",
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """GAN-based validation and inspiration loop.
-
-        Uses discriminator-style evaluation to check what was created.
-        If it doesn't reach user request or can be made better,
-        generates inspiration to create better than before.
-
-        Returns:
-            z_inspired: (B, latent_dim) inspired latent
-            score: (B,) quality score [0, 1]
-        """
-        score = self.inspiration_loop.evaluate(z_created, z_target)
-        z_inspired = self.inspiration_loop.inspire(z_created, score, z_target)
-        return z_inspired, score
-
-    def iterate_refinement(
-        self,
-        generator_fn,
-        initial_latent: torch.Tensor,
-        z_target: torch.Tensor,
-        modality: str = "image",
-        max_iterations: int = 5,
-        target_score: float = 0.95,
-    ) -> Tuple[torch.Tensor, List[float]]:
-        """Full GAN validation + inspiration refinement loop.
-
-        1. Generate using generator_fn(latent)
-        2. GAN evaluates quality and alignment
-        3. If score < target: inspire better latent
-        4. Repeat until threshold met or max iterations.
-
-        Returns:
-            best_output: Final best generation
-            scores: List of scores per iteration
-        """
-        scores = []
-        z = initial_latent
-
-        for iteration in range(max_iterations):
-            # Generate
-            output = generator_fn(z)
-
-            # GAN validates
-            score = self.inspiration_loop.evaluate(z, z_target)
-            scores.append(score.mean().item())
-
-            # Check: reached user request or better?
-            if score.mean().item() >= target_score:
-                break
-
-            # Inspire better than before
-            z = self.inspiration_loop.inspire(z, score, z_target)
-
-        return output, scores
-
-    def clear_memory(self):
-        """Clear the memory bank."""
-        self.memory = []
-
-
-# ==============================================================================
 # Inspiration Feedback Loop (GAN Validation + Improvement)
 # ==============================================================================
 
@@ -720,3 +530,193 @@ class InspirationFeedbackLoop(nn.Module):
         loss = F.mse_loss(improved_score, current_score + 0.1)
 
         return loss
+
+
+# ==============================================================================
+# Creativity Engine
+# ==============================================================================
+
+class CreativityEngine(nn.Module):
+    """Main creativity engine combining all modules.
+
+    Handles cross-modal consistency, in-context generation,
+    style transfer, and concept blending.
+
+    Usage:
+        engine = CreativityEngine()
+
+        # Generate consistent content
+        z_image = vae.encode(image, "image")
+        z_video = engine.generate_consistent(
+            z_image, "video", vae
+        )
+
+        # Transfer style
+        z_stylized = engine.transfer_style(
+            z_image, z_painting
+        )
+
+        # Blend concepts
+        z_blended = engine.blend_concepts(
+            z_cat, z_piano, "text", "audio"
+        )
+    """
+
+    def __init__(self, latent_dim: int = 512, hidden_dim: int = 1024):
+        super().__init__()
+
+        self.consistency = CrossModalConsistency(latent_dim, hidden_dim)
+        self.in_context = InContextGeneration(latent_dim, hidden_dim)
+        self.style_transfer = StyleTransfer(latent_dim, hidden_dim)
+        self.concept_blending = ConceptBlending(latent_dim, hidden_dim)
+        self.inspiration_loop = InspirationFeedbackLoop(latent_dim, hidden_dim)
+
+        # Memory for in-context generation
+        self.memory: List[torch.Tensor] = []
+
+    def generate_consistent(
+        self,
+        z_reference: torch.Tensor,
+        target_modality: str,
+        source_modality: str,
+    ) -> torch.Tensor:
+        """Generate content consistent with reference.
+
+        Args:
+            z_reference: (B, latent_dim) reference latent
+            target_modality: Target modality
+            source_modality: Source modality
+
+        Returns:
+            (B, latent_dim) consistent latent
+        """
+        # Add to memory
+        self.memory.append(z_reference.detach())
+
+        # Generate using in-context module
+        z_current = torch.randn_like(z_reference)
+        z_new = self.in_context(z_current, self.memory, target_modality)
+
+        return z_new
+
+    def transfer_style(
+        self,
+        z_content: torch.Tensor,
+        z_style: torch.Tensor,
+    ) -> torch.Tensor:
+        """Transfer style between modalities.
+
+        Args:
+            z_content: (B, latent_dim) content latent
+            z_style: (B, latent_dim) style latent
+
+        Returns:
+            (B, latent_dim) stylized latent
+        """
+        return self.style_transfer(z_content, z_style)
+
+    def blend_concepts(
+        self,
+        z1: torch.Tensor,
+        z2: torch.Tensor,
+        modality1: str,
+        modality2: str,
+        blend_ratio: float = 0.5,
+    ) -> torch.Tensor:
+        """Blend concepts from different modalities.
+
+        Args:
+            z1: (B, latent_dim) first concept
+            z2: (B, latent_dim) second concept
+            modality1: Modality of first concept
+            modality2: Modality of second concept
+            blend_ratio: Ratio of blending
+
+        Returns:
+            (B, latent_dim) blended concept
+        """
+        return self.concept_blending(z1, z2, modality1, modality2, blend_ratio)
+
+    def check_consistency(
+        self,
+        z1: torch.Tensor,
+        z2: torch.Tensor,
+        modality1: str,
+        modality2: str,
+    ) -> torch.Tensor:
+        """Check consistency between two latents.
+
+        Args:
+            z1: (B, latent_dim) first latent
+            z2: (B, latent_dim) second latent
+            modality1: Modality of first latent
+            modality2: Modality of second latent
+
+        Returns:
+            (B,) consistency scores in [0, 1]
+        """
+        return self.consistency(z1, z2, modality1, modality2)
+
+    def validate_and_inspire(
+        self,
+        z_created: torch.Tensor,
+        z_target: torch.Tensor,
+        modality: str = "image",
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """GAN-based validation and inspiration loop.
+
+        Uses discriminator-style evaluation to check what was created.
+        If it doesn't reach user request or can be made better,
+        generates inspiration to create better than before.
+
+        Returns:
+            z_inspired: (B, latent_dim) inspired latent
+            score: (B,) quality score [0, 1]
+        """
+        score = self.inspiration_loop.evaluate(z_created, z_target)
+        z_inspired = self.inspiration_loop.inspire(z_created, score, z_target)
+        return z_inspired, score
+
+    def iterate_refinement(
+        self,
+        generator_fn,
+        initial_latent: torch.Tensor,
+        z_target: torch.Tensor,
+        modality: str = "image",
+        max_iterations: int = 5,
+        target_score: float = 0.95,
+    ) -> Tuple[torch.Tensor, List[float]]:
+        """Full GAN validation + inspiration refinement loop.
+
+        1. Generate using generator_fn(latent)
+        2. GAN evaluates quality and alignment
+        3. If score < target: inspire better latent
+        4. Repeat until threshold met or max iterations.
+
+        Returns:
+            best_output: Final best generation
+            scores: List of scores per iteration
+        """
+        scores = []
+        z = initial_latent
+
+        for iteration in range(max_iterations):
+            # Generate
+            output = generator_fn(z)
+
+            # GAN validates
+            score = self.inspiration_loop.evaluate(z, z_target)
+            scores.append(score.mean().item())
+
+            # Check: reached user request or better?
+            if score.mean().item() >= target_score:
+                break
+
+            # Inspire better than before
+            z = self.inspiration_loop.inspire(z, score, z_target)
+
+        return output, scores
+
+    def clear_memory(self):
+        """Clear the memory bank."""
+        self.memory = []

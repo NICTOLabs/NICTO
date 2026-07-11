@@ -226,6 +226,22 @@ def test_creativity_engine():
     z_new = engine.generate_consistent(z_ref, "video", "image")
     print(f"  In-context: {z_new.shape}")
 
+    # Test GAN validate and inspire
+    z_created = torch.randn(2, 512)
+    z_target = torch.randn(2, 512)
+    z_inspired, score = engine.validate_and_inspire(z_created, z_target)
+    print(f"  Validate+Inspire: score={score.mean().item():.3f}, inspired={z_inspired.shape}")
+
+    # Test iterate refinement loop
+    def dummy_generator(z):
+        return torch.randn(z.shape[0], 3, 64, 64)
+
+    initial = torch.randn(2, 512)
+    best_output, scores = engine.iterate_refinement(
+        dummy_generator, initial, z_target, max_iterations=3
+    )
+    print(f"  Iterate refinement: {len(scores)} steps, scores={[f'{s:.3f}' for s in scores]}")
+
     print("  [OK] Creativity Engine passed\n")
 
 
