@@ -297,7 +297,7 @@ class NativeInterleaving(nn.Module):
         # Add modality embedding
         mod_id = self.tokenizer.get_modality_id(modality)
         mod_emb = self.tokenizer.modality_embed(torch.tensor(mod_id, device=tokens.device))
-        h = h + mod_emb.unsqueeze(1)
+        h = h + mod_emb.view(1, 1, -1)
 
         # Transformer blocks
         for block in self.blocks:

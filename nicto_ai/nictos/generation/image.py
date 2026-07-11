@@ -83,7 +83,7 @@ class TimeEmbedding(nn.Module):
 # VAE (Variational Autoencoder)
 # ==============================================================================
 
-class VAE Encoder(nn.Module):
+class VAEEncoder(nn.Module):
     """Encode images to latent vectors."""
 
     def __init__(self, in_channels: int = 3, latent_dim: int = 128, channels: list = None):
@@ -109,7 +109,7 @@ class VAE Encoder(nn.Module):
         return mean, logvar
 
 
-class VAE Decoder(nn.Module):
+class VAEDecoder(nn.Module):
     """Decode latent vectors to images."""
 
     def __init__(self, out_channels: int = 3, latent_dim: int = 128, channels: list = None):
@@ -150,8 +150,8 @@ class VAE(nn.Module):
 
     def __init__(self, in_channels: int = 3, latent_dim: int = 128):
         super().__init__()
-        self.encoder = VAE Encoder(in_channels, latent_dim)
-        self.decoder = VAE Decoder(in_channels, latent_dim)
+        self.encoder = VAEEncoder(in_channels, latent_dim)
+        self.decoder = VAEDecoder(in_channels, latent_dim)
         self.latent_dim = latent_dim
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

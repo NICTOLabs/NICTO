@@ -228,14 +228,15 @@ class MusicGenerator(nn.Module):
     ):
         super().__init__()
         self.dim = dim
+        self.codebook_size = codebook_size
 
         # Audio codec
         self.encoder = AudioEncoder(dim=dim, codebook_size=codebook_size, num_codebooks=num_codebooks)
         self.decoder = AudioDecoder(dim=dim)
         self.rvq = ResidualVectorQuantization(codebook_size, num_codebooks, dim)
 
-        # Input projection
-        self.input_proj = nn.Linear(dim, dim)
+        # Input projection (codebook_size -> model dim)
+        self.input_proj = nn.Linear(codebook_size, dim)
 
         # Time embedding
         self.time_embed = nn.Sequential(
@@ -301,8 +302,8 @@ class MusicGenerator(nn.Module):
         if style is not None:
             context = context + self.style_embed(torch.tensor(style, device=device)).unsqueeze(1)
 
-        # Start from noise
-        z = torch.randn(B, seq_len, self.dim, device=device)
+        # Start from noise (codebook_size dimensional)
+        z = torch.randn(B, seq_len, self.codebook_size, device=device) if hasattr(self, 'codebook_size') else torch.randn(B, seq_len, self.dim, device=device)
 
         # Euler ODE solver
         dt = 1.0 / num_steps
@@ -310,30 +311,32 @@ class MusicGenerator(nn.Module):
             t = torch.full((B,), i * dt, device=device)
             t_emb = self.time_embed(t.view(-1, 1))
 
+            # Project to model dim if needed
+            h = self.input_proj(z) if z.shape[-1] != self.dim else z
+
             # Apply DiT blocks
-            h = z
             for block in self.blocks:
                 h = block(h, context, t_emb)
 
-            # Output projection
+            # Output projection (back to codebook_size)
             h = self.output_norm(h)
             v = self.output_proj(h)
 
             # CFG
             if cfg_scale > 1.0:
                 uncond_context = torch.zeros_like(context)
-                h_uncond = z
+                h_u = self.input_proj(z) if z.shape[-1] != self.dim else z
                 for block in self.blocks:
-                    h_uncond = block(h_uncond, uncond_context, t_emb)
-                h_uncond = self.output_norm(h_uncond)
-                v_uncond = self.output_proj(h_uncond)
+                    h_u = block(h_u, uncond_context, t_emb)
+                h_u = self.output_norm(h_u)
+                v_uncond = self.output_proj(h_u)
                 v = v_uncond + cfg_scale * (v - v_uncond)
 
             z = z + v * dt
 
         # Dequantize to continuous
         codes = z.argmax(dim=-1)  # (B, seq_len)
-        codes = codes.unsqueeze(-1).expand(-1, -1, 8)  # (B, seq_len, num_codebooks)
+        codes = codes.unsqueeze(-1).expand(-1, -1, self.rvq.num_codebooks)  # (B, seq_len, num_codebooks)
         h = self.rvq.dequantize(codes)
 
         # Decode to waveform
