@@ -207,7 +207,7 @@ def benchmark_latency():
 
 def benchmark_creativity():
     print("\n" + "=" * 70)
-    print("  BENCHMARK 3: CREATIVITY LOOP (GAN VALIDATION + INSPIRATION)")
+    print("  BENCHMARK 3: CREATIVITY LOOP v2 (Gradient-Refined + Meta-Learned)")
     print("=" * 70)
 
     engine = CreativityEngine(latent_dim=512, hidden_dim=1024)
@@ -229,7 +229,7 @@ def benchmark_creativity():
             aspects = engine.inspiration_loop.evaluate_multi_aspect(z_created, z_target)
             aspects_after = engine.inspiration_loop.evaluate_multi_aspect(z_inspired, z_target)
 
-        # Iterate refinement
+        # Iterate refinement (with gradient-based refinement)
         def gen(z):
             return torch.randn(z.shape[0], 3, 64, 64)
 
@@ -245,12 +245,14 @@ def benchmark_creativity():
             "iterations": len(scores),
             "aspects_before": aspects.mean(dim=0).tolist(),
             "aspects_after": aspects_after.mean(dim=0).tolist(),
+            "scores_per_iter": scores,
         })
 
-    print(f"\n  {'Initial Q':>10} {'Before':>8} {'After':>8} {'Improve':>8} {'Iters':>6}")
-    print("  " + "-" * 50)
+    print(f"\n  {'Init Q':>7} {'Before':>7} {'After':>7} {'Delta':>7} {'Iters':>5} {'Trajectory'}")
+    print("  " + "-" * 70)
     for r in results:
-        print(f"  {r['initial_quality']:>10.1f} {r['score_before']:>8.3f} {r['score_after']:>8.3f} {r['improvement']:>+8.3f} {r['iterations']:>6}")
+        traj = " -> ".join([f"{s:.2f}" for s in r["scores_per_iter"][:5]])
+        print(f"  {r['initial_quality']:>7.1f} {r['score_before']:>7.3f} {r['score_after']:>7.3f} {r['improvement']:>+7.3f} {r['iterations']:>5} {traj}")
 
     print(f"\n  Multi-aspect quality breakdown (Realism, Creativity, Alignment, Overall):")
     for r in results[:3]:
@@ -259,8 +261,49 @@ def benchmark_creativity():
         print(f"    Q={r['initial_quality']:.1f} before: [{', '.join(ba)}]")
         print(f"    Q={r['initial_quality']:.1f} after:  [{', '.join(aa)}]")
 
+    # Test InfoNCE contrastive consistency
+    print(f"\n  Testing InfoNCE contrastive consistency:")
+    for mod1, mod2 in [("image", "video"), ("text", "audio"), ("image", "text")]:
+        z1 = torch.randn(8, 512)
+        z2 = torch.randn(8, 512)
+        with torch.no_grad():
+            score = engine.check_consistency(z1, z2, mod1, mod2)
+            infonce = engine.consistency.infonce_loss(z1, z2, mod1, mod2)
+        print(f"    {mod1}->{mod2}: consistency={score.mean().item():.3f}, infonce_loss={infonce.item():.3f}")
+
+    # Test gradient-based refinement direction
+    print(f"\n  Gradient-based refinement:")
+    z = torch.randn(2, 512)
+    z_target = torch.randn(2, 512)
+    with torch.no_grad():
+        grad_dir = engine.inspiration_loop._compute_gradient_direction(z, z_target)
+        grad_norm = grad_dir.norm(dim=-1).mean()
+    print(f"    Gradient direction norm: {grad_norm:.4f} (non-zero = gradient is flowing)")
+
+    # Test style transfer v2
+    print(f"\n  Style transfer v2:")
+    z_content = torch.randn(4, 512)
+    z_style = torch.randn(4, 512)
+    with torch.no_grad():
+        z_stylized = engine.transfer_style(z_content, z_style)
+        content_sim = F.cosine_similarity(z_content, z_stylized, dim=-1).mean()
+        style_sim = F.cosine_similarity(z_style, z_stylized, dim=-1).mean()
+    print(f"    Content preservation: {content_sim:.3f}")
+    print(f"    Style absorption:     {style_sim:.3f}")
+
+    # Test concept blending v2
+    print(f"\n  Concept blending v2:")
+    z1 = torch.randn(4, 512)
+    z2 = torch.randn(4, 512)
+    for ratio in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        with torch.no_grad():
+            z_blend = engine.blend_concepts(z1, z2, "text", "audio", ratio)
+        sim1 = F.cosine_similarity(z1, z_blend, dim=-1).mean()
+        sim2 = F.cosine_similarity(z2, z_blend, dim=-1).mean()
+        print(f"    Ratio {ratio:.2f}: z1_sim={sim1:.3f}, z2_sim={sim2:.3f}")
+
     print(f"\n  Gemini Omni: No iterative creativity loop — single-pass generation only")
-    print(f"  NICTO: GAN validates, inspires, iterates until target met")
+    print(f"  NICTO v2: Gradient-refined GAN validation + InfoNCE consistency + adaptive inspiration")
 
     return results
 
@@ -271,7 +314,7 @@ def benchmark_creativity():
 
 def benchmark_consistency():
     print("\n" + "=" * 70)
-    print("  BENCHMARK 4: CROSS-MODAL CONSISTENCY")
+    print("  BENCHMARK 4: CROSS-MODAL CONSISTENCY v2 (InfoNCE Contrastive)")
     print("=" * 70)
 
     engine = CreativityEngine(latent_dim=512, hidden_dim=1024)
@@ -291,20 +334,28 @@ def benchmark_consistency():
             score = engine.check_consistency(z1, z2, m1, m2)
         print(f"  {m1:>10} {m2:>10} {score.mean().item():>8.3f}")
 
-    # Test style transfer
-    print(f"\n  Style transfer consistency:")
+    # Test InfoNCE loss (should be lower = better alignment)
+    print(f"\n  InfoNCE contrastive losses:")
+    for m1, m2 in [("image", "video"), ("text", "audio"), ("image", "text")]:
+        z1 = torch.randn(8, 512)
+        z2 = torch.randn(8, 512)
+        with torch.no_grad():
+            loss = engine.consistency.infonce_loss(z1, z2, m1, m2)
+        print(f"    {m1}->{m2}: {loss.item():.3f}")
+
+    # Test style transfer v2
+    print(f"\n  Style transfer v2:")
     z_content = torch.randn(4, 512)
     z_style = torch.randn(4, 512)
     with torch.no_grad():
         z_stylized = engine.transfer_style(z_content, z_style)
-        # Check if stylized content preserves some content info
         content_sim = F.cosine_similarity(z_content, z_stylized, dim=-1).mean()
         style_sim = F.cosine_similarity(z_style, z_stylized, dim=-1).mean()
     print(f"    Content preservation: {content_sim:.3f}")
     print(f"    Style absorption:     {style_sim:.3f}")
 
-    # Test concept blending
-    print(f"\n  Concept blending:")
+    # Test concept blending v2
+    print(f"\n  Concept blending v2:")
     z1 = torch.randn(4, 512)
     z2 = torch.randn(4, 512)
     for ratio in [0.0, 0.25, 0.5, 0.75, 1.0]:
@@ -315,7 +366,7 @@ def benchmark_consistency():
         print(f"    Ratio {ratio:.2f}: z1_sim={sim1:.3f}, z2_sim={sim2:.3f}")
 
     print(f"\n  Gemini Omni: Native multimodal understanding but no explicit consistency module")
-    print(f"  NICTO: Dedicated consistency network + style transfer + concept blending")
+    print(f"  NICTO v2: InfoNCE contrastive + multi-head scoring + learned temperature")
 
 
 # ============================================================================
