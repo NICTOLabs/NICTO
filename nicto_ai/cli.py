@@ -29,11 +29,11 @@ def main():
     train_p.add_argument("--steps", type=int, default=None, help="Training steps")
 
     # chat
-    chat_p = sub.add_parser("chat", help="Chat with NICTO (tool-aware)")
-    chat_p.add_argument("--checkpoint", default="nicto_model_final.pt", help="Model checkpoint")
-    chat_p.add_argument("--max-tokens", type=int, default=128, help="Max tokens to generate")
-    chat_p.add_argument("--model", action="store_true", help="Force LLM mode (no tool detection)")
-    chat_p.add_argument("--tools", action="store_true", help="List available tools and exit")
+    chat_p = sub.add_parser("chat", help="Chat with NICTO")
+    chat_p.add_argument("--backend", default="rule", choices=["rule", "echo", "openai", "anthropic"],
+                        help="Chat backend (default: rule)")
+    chat_p.add_argument("--model", default=None, help="Model name for API backends")
+    chat_p.add_argument("--max-history", type=int, default=20, help="Max chat history")
 
     # tool
     tool_p = sub.add_parser("tool", help="Invoke a tool directly")
@@ -81,105 +81,8 @@ def main():
         train(**kwargs)
 
     elif args.command == "chat":
-        print_banner()
-        print("NICTO AI - Chat (tool-aware)")
-        print("  /help          - Show available commands")
-        print("  /tools         - List available tools")
-        print("  /tool_name ... - Invoke a tool directly")
-        print("  Type naturally - NICTO auto-detects tools or uses LLM")
-        print()
-
-        from nicto_ai.voice.backend_interface import NICTOBackend, Message, EchoBackend
-        from nicto_ai.tools import create_default_registry
-        from nicto_ai.agent import ToolAgent
-
-        # Load tools
-        registry = create_default_registry()
-        agent = ToolAgent(registry)
-
-        # Load LLM backend
-        backend = None
-        if not args.model and not args.tools:
-            backend = NICTOBackend(checkpoint_path=args.checkpoint)
-            if not backend.is_available():
-                print("(Model not loaded - tools-only mode)\n")
-
-        history = []
-
-        def llm_chat(user_input: str) -> str:
-            """Fall back to LLM"""
-            if backend and backend.is_available():
-                history.append(Message(role="user", content=user_input))
-                result = backend.complete(history, max_tokens=args.max_tokens)
-                history.append(Message(role="assistant", content=result.text))
-                return result.text
-            return None
-
-        # Print available tools on demand
-        if args.tools:
-            print(agent.list_tools())
-            return
-
-        while True:
-            try:
-                user_input = input("You: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nBye!")
-                break
-
-            if user_input.lower() in ("quit", "exit", "q"):
-                print("Bye!")
-                break
-
-            if not user_input:
-                continue
-
-            # Help
-            if user_input == "/help":
-                print("Commands:")
-                print("  /tools            - List available tools")
-                print("  /tool_name params  - Invoke tool directly (e.g. /calculator 2+2)")
-                print("  /model text       - Force LLM generation")
-                print("  /clear            - Clear history")
-                print("  quit              - Exit")
-                print()
-                continue
-
-            if user_input == "/clear":
-                history.clear()
-                print("(History cleared)\n")
-                continue
-
-            # Force model mode
-            if user_input.startswith("/model "):
-                text = user_input[7:]
-                resp = llm_chat(text)
-                if resp:
-                    print(f"NICTO: {resp}\n")
-                else:
-                    print("(Model not available. Use a tool instead.)\n")
-                continue
-
-            # Tool list
-            if user_input == "/tools":
-                print(agent.list_tools())
-                print()
-                continue
-
-            # Try tool agent first
-            response = agent.process(user_input)
-
-            if response:
-                if response.tool_result and response.tool_result.execution_time_ms > 0:
-                    print(f"[{response.tool_name} in {response.execution_time_ms:.0f}ms]")
-                print(f"NICTO: {response.text}\n")
-            else:
-                # Fall back to LLM
-                resp = llm_chat(user_input)
-                if resp:
-                    print(f"NICTO: {resp}\n")
-                else:
-                    print("(No tool matched and model not available. Try /tools to see what I can do.)\n")
+        from nicto_ai.chat import run_chat
+        run_chat(backend=args.backend, model=args.model)
 
     elif args.command == "tool":
         from nicto_ai.tools import create_default_registry
