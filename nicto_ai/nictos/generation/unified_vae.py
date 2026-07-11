@@ -235,6 +235,50 @@ class TextEncoder(nn.Module):
         return self.proj(h)
 
 
+class PointCloudEncoder(nn.Module):
+    """Encode point clouds to latent vectors.
+
+    Uses PointNet++ style set abstraction for hierarchical features.
+    Input: (B, N, 6) - xyz (3) + rgb (3)
+    Output: (mean, logvar) each (B, latent_dim)
+    """
+
+    def __init__(self, in_channels: int = 6, latent_dim: int = 512, channels: list = None):
+        super().__init__()
+        channels = channels or [64, 128, 256]
+        layers = []
+        ch = in_channels
+        for out_ch in channels:
+            layers.extend([
+                nn.Linear(ch, out_ch),
+                nn.LayerNorm(out_ch),
+                nn.SiLU(),
+            ])
+            ch = out_ch
+        self.mlp = nn.ModuleList(layers)
+        self.pool_proj = nn.Linear(ch, latent_dim * 2)  # mean + logvar
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode point cloud to latent distribution.
+
+        Args:
+            x: (B, N, 6) point cloud (xyz + rgb)
+
+        Returns:
+            (mean, logvar) each (B, latent_dim)
+        """
+        h = x
+        for layer in self.mlp:
+            h = layer(h)
+        # Global max + mean pooling
+        h_max = h.max(dim=1)[0]
+        h_mean = h.mean(dim=1)[0]
+        h = h_max + h_mean
+        params = self.pool_proj(h)
+        mean, logvar = params.chunk(2, dim=-1)
+        return mean, logvar
+
+
 # ==============================================================================
 # Unified Decoder
 # ==============================================================================
@@ -297,6 +341,17 @@ class UnifiedDecoder(nn.Module):
             nn.Tanh(),
         )
 
+        # Point cloud decoder (MLP-based)
+        self.pointcloud_decoder = nn.Sequential(
+            nn.Linear(latent_dim, 256),
+            nn.LayerNorm(256),
+            nn.SiLU(),
+            nn.Linear(256, 512),
+            nn.LayerNorm(512),
+            nn.SiLU(),
+            nn.Linear(512, 2048 * 6),  # 2048 points x 6 features (xyz + rgb)
+        )
+
     def forward(self, z: torch.Tensor, modality: str = "image") -> torch.Tensor:
         if modality == "audio":
             z_1d = z.squeeze(2) if z.dim() == 4 else z
@@ -314,6 +369,12 @@ class UnifiedDecoder(nn.Module):
             h = self.video_head(h)
             _, Co, Ho, Wo = h.shape
             return h.reshape(B, T_up, Co, Ho, Wo).permute(0, 2, 1, 3, 4)
+
+        if modality == "point_cloud":
+            B = z.shape[0]
+            z_flat = z.view(B, -1) if z.dim() > 2 else z
+            points = self.pointcloud_decoder(z_flat)
+            return points.view(B, 2048, 6)
 
         h = self.shared_layers(z)
         return self.image_head(h)
@@ -362,12 +423,13 @@ class UnifiedVAE(nn.Module):
         self.video_encoder = VideoEncoder(in_channels, latent_dim)
         self.audio_encoder = AudioEncoder(1, latent_dim)
         self.text_encoder = TextEncoder(latent_dim=latent_dim)
+        self.pointcloud_encoder = PointCloudEncoder(6, latent_dim)
 
         # Shared decoder
         self.decoder = UnifiedDecoder(latent_dim, in_channels)
 
         # Modality embeddings (for cross-modal consistency)
-        self.modality_embed = nn.Embedding(4, latent_dim)  # 0=text, 1=image, 2=video, 3=audio
+        self.modality_embed = nn.Embedding(5, latent_dim)  # 0=text, 1=image, 2=video, 3=audio, 4=point_cloud
 
     def encode(self, x: torch.Tensor, modality: str = "image") -> tuple[torch.Tensor, torch.Tensor]:
         """Encode input to latent space.
@@ -390,11 +452,13 @@ class UnifiedVAE(nn.Module):
             mean = self.text_encoder(x)
             logvar = torch.zeros_like(mean)  # Text is deterministic
             return mean, logvar
+        elif modality == "point_cloud":
+            mean, logvar = self.pointcloud_encoder(x)
         else:
             raise ValueError(f"Unknown modality: {modality}")
 
         # Add modality embedding for cross-modal consistency
-        mod_id = {"text": 0, "image": 1, "video": 2, "audio": 3}[modality]
+        mod_id = {"text": 0, "image": 1, "video": 2, "audio": 3, "point_cloud": 4}[modality]
         mod_emb = self.modality_embed(torch.tensor(mod_id, device=x.device))
         # Broadcast mod_emb to match mean's shape
         mod_emb = mod_emb.view(1, -1, *([1] * (mean.dim() - 2)))
@@ -406,8 +470,8 @@ class UnifiedVAE(nn.Module):
         """Decode latent vector to modality.
 
         Args:
-            z: (B, latent_dim, H, W) latent tensor
-            modality: "image", "video", or "audio"
+            z: (B, latent_dim, H, W) latent tensor (or (B, latent_dim) for point_cloud)
+            modality: "image", "video", "audio", or "point_cloud"
 
         Returns:
             Decoded tensor in modality space
@@ -438,6 +502,9 @@ class UnifiedVAE(nn.Module):
     @torch.no_grad()
     def sample(self, num_samples: int, modality: str = "image", device: str = "cpu") -> torch.Tensor:
         """Sample from the latent space."""
+        if modality == "point_cloud":
+            z = torch.randn(num_samples, self.latent_dim, device=device)
+            return self.decode(z, modality)
         z = torch.randn(num_samples, self.latent_dim, 1, 1, device=device)
         return self.decode(z, modality)
 

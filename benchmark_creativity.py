@@ -26,6 +26,7 @@ from nicto_ai.nictos.generation.unified_vae import UnifiedVAE
 from nicto_ai.nictos.generation.flow_matching import DiT
 from nicto_ai.nictos.generation.video_generator import VideoGenerator
 from nicto_ai.nictos.generation.audio_generator import MusicGenerator, SFXGenerator
+from nicto_ai.nictos.generation.point_cloud_generator import PointCloudGenerator
 # image.py has syntax error (class VAE Encoder) - skip it
 from nicto_ai.nictos.generation.native_interleaving import NativeInterleaving, Modality
 from nicto_ai.nictos.generation.creativity_engine import CreativityEngine, InspirationFeedbackLoop
@@ -69,6 +70,7 @@ def benchmark_params():
     video_gen = VideoGenerator(latent_dim=256, hidden_dim=256, context_dim=512, num_layers=4, num_heads=4)
     music_gen = MusicGenerator(dim=256, context_dim=512, codebook_size=512, num_codebooks=4, num_layers=4, num_heads=4)
     sfx_gen = SFXGenerator(dim=256, context_dim=512, num_layers=4)
+    pc_gen = PointCloudGenerator(latent_dim=512, hidden_dim=256, num_layers=4, context_dim=512)
     creativity = CreativityEngine(latent_dim=512, hidden_dim=1024)
     interleaver = NativeInterleaving(vocab_size=30000, image_vocab_size=512, video_vocab_size=512, audio_vocab_size=512, embed_dim=256, hidden_dim=512, num_layers=4, num_heads=4)
 
@@ -78,6 +80,7 @@ def benchmark_params():
         "Video Generator": video_gen,
         "Music Generator": music_gen,
         "SFX Generator": sfx_gen,
+        "3D Point Cloud Gen": pc_gen,
         "Creativity Engine": creativity,
         "  Inspiration Loop": creativity.inspiration_loop,
         "  Cross-Modal Consistency": creativity.consistency,
@@ -155,6 +158,15 @@ def benchmark_latency():
         audio = music.generate(ctx, duration=0.5, num_steps=3)
     audio_ms = (time.perf_counter() - t0) * 1000
     print(f"  Audio generate (0.5s, 3 steps):       {audio_ms:.1f} ms")
+
+    # 3D point cloud generation latency
+    pc_gen = PointCloudGenerator(latent_dim=512, hidden_dim=256, num_layers=4, context_dim=512)
+    pc_gen.eval()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        points = pc_gen.generate(num_points=2048, batch_size=1, num_steps=10)
+    pc_ms = (time.perf_counter() - t0) * 1000
+    print(f"  3D point cloud (2048 pts, 10 steps):  {pc_ms:.1f} ms")
 
     # Creativity loop latency
     creativity = CreativityEngine(latent_dim=512, hidden_dim=1024)
@@ -441,7 +453,7 @@ def print_feature_comparison():
 
     features = [
         ("Multi-modal Input", "Text, Image, Video, Audio", "Text, Image, Video, Audio"),
-        ("Multi-modal Output", "Text, Image, Video, Audio", "Text, Image, Audio (video limited)"),
+        ("Multi-modal Output", "Text, Image, Video, Audio, 3D Point Cloud", "Text, Image, Audio (video limited)"),
         ("Unified Latent Space", "YES (shared 512-dim)", "NO (separate encoders)"),
         ("Cross-modal Consistency", "YES (learned network)", "Implicit (shared training)"),
         ("Iterative Creativity", "YES (GAN + inspiration loop)", "NO (single-pass)"),
@@ -455,6 +467,7 @@ def print_feature_comparison():
         ("Consciousness/Metacognition", "YES (uncertainty + error detection)", "NO"),
         ("Emotional Processing", "YES (VAD model + empathy)", "NO"),
         ("Runs Locally", "YES (fits consumer GPU)", "NO (cloud only)"),
+        ("3D Generation", "YES (point clouds with flow matching)", "NO"),
         ("Open Source", "YES", "NO"),
     ]
 
