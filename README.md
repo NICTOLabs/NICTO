@@ -1,76 +1,122 @@
-# NICTO AI
+# NICTO
 
-Neural architecture — reasoning, memory, emotion, and consciousness in one model.
+**Neural Integrated Cognitive Transformer Architecture** — a cognitive language model with parallel reasoning paths, memory, emotion, creativity, and self-monitoring, fused into one unified system.
 
-**Status:** Undergoing training. Current checkpoint is ~207M parameters (dim=1024, 6 reasoning layers, 4 MoE experts). No benchmarks run yet.
+## Architecture
+
+NICTO is not just a transformer. Every forward pass runs **10 integrated components** in parallel, fused by learned gating:
+
+```
+Input (text + optional images + optional audio)
+  → Multimodal Encoders
+  → NOVA Core × N layers:
+      [SSM + SparseAttn + MoE + MoD + PRS] fused by learned gate
+  → Looped Reasoning (recurrent with exit gates)
+  → Cognitive Subsystems (parallel):
+      Memory · Emotional · Creative · Consciousness · HierarchicalMemory
+  → NeuralBus (cross-network priority attention)
+  → DeepSearch (beam-search for hard tokens)
+  → Meta-Fusion Gate (learned weights over ALL outputs)
+  → Next token
+```
+
+### Components
+
+| Component | What it does |
+|-----------|-------------|
+| **NOVA Core** | 5 parallel paths per block: SSM (Mamba-3), Sparse Attention, MoE, Mixture-of-Depth, Persistent Recurrent State |
+| **Looped Reasoning** | Ouro-style recurrent block up to 32 steps with learned exit gates |
+| **MoD** | Per-token router skips easy tokens — saves FLOPs dynamically |
+| **NeuralBus** | Cross-network attention where each subsystem attends to the others |
+| **DeepSearch** | Multi-step beam search over future tokens for uncertain positions |
+| **Meta-Fusion Gate** | `softmax(W · concat[core, mem, emo, cre, con])` — learned per-token subsystem weighting |
+
+### Config Scales
+
+| Config | Params | dim | layers | MoE experts | looped steps |
+|--------|--------|-----|--------|-------------|-------------|
+| Tiny | 7.9M | 128 | 2 | 2 | 4 |
+| 100M | 608M | 768 | 12 | 4 | 8 |
+| 1B | ~1B | 2048 | 24 | 8 | 12 |
+| 7B | ~7B | 4096 | 32 | 8 | 16 |
+| 5T | ~5T | 8192 | 96 | **512** | **32** |
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/NICTOLabs/NICTO.git
 cd NICTO
+
+# Install dependencies
 pip install -e .
 
-# Chat (tool-aware)
-nicto chat
+# Train the tiny model (runs on CPU)
+python train_master.py --config tiny --steps 1000
 
-# Invoke tools directly
-nicto tool web_search query="Python programming"
-nicto tool calculator expression="2+2"
+# Download more training data
+python prepare_data.py --all
 
-# List all tools
-nicto info
+# Validate the architecture
+python -m nicto_ai.training.model_master
 ```
 
-## Tools (all 22 working)
+## Data Pipeline
 
-NICTO has 22 built-in tools accessible via natural language or direct invocation:
+Pre-tokenized memory-mapped `.bin` files for O(1) random access during training:
 
-| Category | Tools |
-|----------|-------|
-| **Knowledge** | `web_search` (Bing via TLS fingerprint), `knowledge_query` |
-| **Development** | `code_executor` (sandboxed), `shell`, `code_review`, `file_manager` |
-| **Content** | `content_writer`, `summarizer` (5 modes), `markdown_builder` |
-| **Code** | `test_generator` (pytest/Jest), `regex_builder` |
-| **Data** | `data_analysis`, `json_builder`, `text_to_sql` |
-| **Analysis** | `text_analyzer`, `code_review` |
-| **Math** | `calculator`, `math_engine` (derivatives/matrix/statistics) |
-| **Utility** | `translator`, `api_caller`, `password_generator`, `hash_tool`, `color_palette` |
+```bash
+# Download and pre-tokenize datasets
+python prepare_data.py --datasets oasst1,dolly,c4,alpaca
 
-Usage: `nicto chat` — type naturally (e.g., "search for Python", "calculate 2+2", "summarize this"). Tools are auto-detected; falls back to LLM.
+# Train with auto-discovered data
+python train_master.py --config 100m --steps 5000 --batch-size 2
+```
 
-## C++ Acceleration Engine
+Supported datasets: OASST1, Dolly 15K, C4, Alpaca, OpenOrca, FineWeb, Wikipedia, Cosmopedia.
 
-The tokenizer and sampler have optional C++ bindings (compiled via MSVC 2022):
+## Project Structure
 
-| Operation | Python | C++ | Speedup |
-|-----------|--------|-----|---------|
-| Tokenizer (4K chars) | 691ms | 266ms | **2.6x** |
-| Sampler (vocab 32K) | 3157ms | 1909ms | **1.7x** |
-| Sampler (vocab 256) | 259ms | 28ms | **9.4x** |
+```
+nicto_ai/
+├── training/          # Models + training pipeline
+│   ├── model_master.py       # Ultimate integration (all 10 components)
+│   ├── model_multimodal.py   # Vision + Audio encoders
+│   ├── model_nova.py         # NOVA core blocks
+│   ├── model_unified.py      # NOVA + subsystems + fusion
+│   ├── model_v2.py           # Decoder backbone
+│   ├── data_pipeline_v2.py   # Memory-mapped .bin data pipeline
+│   ├── trainer.py            # Training utilities
+│   └── pretrain.py           # Pre-training entry point
+├── core/              # Foundational components
+│   ├── memory.py             # HierarchicalMemory (4-level)
+│   ├── consciousness.py      # RealConsciousnessLayer
+│   ├── deepsearch.py         # DeepSearchModule
+│   ├── moe.py                # MoE with load balancing
+│   ├── mamba.py              # Selective SSM (Mamba-3)
+│   └── emotion.py            # EmotionalResponseGenerator
+├── tokenizer/         # BPE tokenizer (vocab 32000)
+├── agent/             # LLM-powered agent with tools
+├── voice/             # STT/TTS voice pipeline
+├── browser/           # Headless browser + Tor
+└── api/               # FastAPI server
+```
 
-Build with: `build.bat` (requires VS Build Tools 2022).
+## Training Data
 
-## Architecture
+Currently **17.4M pre-tokenized tokens** from 4 open-source datasets (OASST1, C4, Alpaca, Dolly). Ready for the first real training run on GPU.
 
-NICTO combines multiple neural approaches in a single model:
+## Status
 
-| Component | What it does |
-|-----------|-------------|
-| **Reasoning** (MoE) | 128-head attention + 64-expert MoE + FFN for logic, math, code |
-| **Memory** (SSM) | 48-layer Mamba SSM + hierarchical memory for long context |
-| **Emotion** (LNN) | 20-layer Liquid Neural Net for adaptive behavior |
-| **Creativity** | 12-layer Transformer Encoder for generation |
-| **Perception** | Multihead attention for multimodal input |
-| **Consciousness** | Meta-cognitive projection layer for self-monitoring |
-| **Neural Bus** | Cross-network attention + fusion gate + NetworkPriorityGate |
-
-Full 150B design requires ~200 A100s. The 207M checkpoint runs on consumer GPUs.
-
-## Voice System
-
-STT → LLM/ToolAgent → TTS pipeline. Supports sandboxed code execution and tool-aware responses.
+- [x] Master architecture designed and validated (tiny through 5T configs)
+- [x] Text-only forward + loss (validated)
+- [x] Text+image forward (validated)
+- [x] Text+audio forward (validated)
+- [x] Generation (validated)
+- [x] Data pipeline with streaming downloads (validated)
+- [ ] Full training run (needs GPU)
+- [ ] Evaluation (MMLU, HumanEval, etc.)
+- [ ] Cognitive subsystem ablation studies
 
 ## License
 
-**All rights reserved.** Copyright © NICTOLabs. No part of this software, its source code, architecture, models, trained weights, or associated ideas may be copied, reproduced, modified, distributed, redistributed, published, or used — in whole or in part — without the express prior written permission of NICTOLabs. This software is made available solely for the private use of its owners and is not licensed for any other purpose.
+All rights reserved. Copyright © NICTOLabs.
