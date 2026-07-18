@@ -22,3 +22,21 @@ dist/
 Thumbs.db
 .DS_Store
 NICTO/
+
+# Logs & checkpoints
+*.log
+checkpoints/
+checkpoints_looped/
+checkpoints_v2/
+logs/
+
+# Training data
+*.jsonl
+training_data.json
+
+# C++ build
+CMakeFiles/
+cmake-build-*/
+*.cmake
+Makefile
+CMakeCache.txt

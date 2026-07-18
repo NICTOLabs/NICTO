@@ -29,11 +29,11 @@ def main():
     train_p.add_argument("--steps", type=int, default=None, help="Training steps")
 
     # chat
-    chat_p = sub.add_parser("chat", help="Chat with NICTO")
-    chat_p.add_argument("--backend", default="rule", choices=["rule", "echo", "openai", "anthropic"],
-                        help="Chat backend (default: rule)")
-    chat_p.add_argument("--model", default=None, help="Model name for API backends")
-    chat_p.add_argument("--max-history", type=int, default=20, help="Max chat history")
+    chat_p = sub.add_parser("chat", help="Chat with NICTO (LLM + tools)")
+    chat_p.add_argument("--provider", default="openai", choices=["openai", "anthropic"],
+                        help="LLM provider (default: openai)")
+    chat_p.add_argument("--model", default=None, help="Model name (e.g., gpt-4o-mini)")
+    chat_p.add_argument("--api-key", default=None, help="API key (or set OPENAI_API_KEY env)")
 
     # tool
     tool_p = sub.add_parser("tool", help="Invoke a tool directly")

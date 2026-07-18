@@ -194,7 +194,7 @@ def get_lr(step, warmup_steps, total_steps, base_lr, min_lr):
 # ============================================================
 # TRAINING LOOP
 # ============================================================
-def train(config_name="colab", data_path=None, data_mix=None, resume_from=None):
+def train(config_name="cpu", data_path=None, data_mix=None, resume_from=None):
     # Config
     if config_name == "colab":
         train_config = {
@@ -249,6 +249,38 @@ def train(config_name="colab", data_path=None, data_mix=None, resume_from=None):
             "data_mix": None,
         }
         model_config = nicto_5b_config()
+    elif config_name == "cpu":
+        # Small model for CPU training
+        train_config = {
+            "lr": 5e-4, "min_lr": 1e-5, "warmup": 50, "steps": 10000,
+            "batch_size": 1, "grad_accum": 4, "save_every": 1000,
+            "eval_every": 200, "grad_clip": 0.5, "weight_decay": 0.01,
+            "seq_len": 256, "data_path": None,
+            "data_mix": None,
+        }
+        model_config = NICTOTrainConfig(
+            vocab_size=256, dim=128, max_seq_len=256,
+            reasoning_layers=1, n_heads=4, n_kv_heads=2,
+            moe_experts=2, moe_activated=1, moe_hidden=128,
+            memory_layers=1, emotional_layers=1, creative_layers=1,
+        )
+    elif config_name == "cpu_looped":
+        # Looped reasoning model for CPU (Ouro-style)
+        # ~1M params but equivalent to ~4M via recurrent computation
+        train_config = {
+            "lr": 5e-4, "min_lr": 1e-5, "warmup": 50, "steps": 10000,
+            "batch_size": 1, "grad_accum": 4, "save_every": 1000,
+            "eval_every": 200, "grad_clip": 0.5, "weight_decay": 0.01,
+            "seq_len": 256, "data_path": None,
+            "data_mix": None,
+            "entropy_weight": 0.01,  # Entropy regularization weight
+        }
+        model_config = NICTOTrainConfig(
+            vocab_size=256, dim=128, max_seq_len=256,
+            reasoning_layers=1, n_heads=4, n_kv_heads=2,
+            moe_experts=2, moe_activated=1, moe_hidden=128,
+            memory_layers=2, emotional_layers=2, creative_layers=2,
+        )
     else:
         raise ValueError(f"Unknown config: {config_name}")
 
@@ -462,7 +494,7 @@ def train(config_name="colab", data_path=None, data_mix=None, resume_from=None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="colab", choices=["colab", "colab_large", "k8s", "5b"])
+    parser.add_argument("--config", default="cpu", choices=["cpu", "colab", "colab_large", "k8s", "5b"])
     parser.add_argument("--data-path", type=str, default=None, help="Path to training data (file or directory)")
     parser.add_argument("--data-mix", type=str, nargs="+", help="Mixed datasets: path1:weight1 path2:weight2 ...")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint (.pt) to warm-start from")
