@@ -147,7 +147,7 @@ class NICTOMasterConfig:
 def config_master_tiny() -> NICTOMasterConfig:
     return NICTOMasterConfig(
         vocab_size=32000, dim=128, n_heads=4, n_kv_heads=2,
-        n_layers=2, max_seq_len=256, ffn_dim=256,
+        n_layers=2, max_seq_len=2048, ffn_dim=256,
         ssm_d_state=4, ssm_d_conv=2, ssm_expand=2,
         attn_window_size=32, attn_n_global_tokens=4,
         moe_experts=2, moe_activated_min=1, moe_activated_max=2,
