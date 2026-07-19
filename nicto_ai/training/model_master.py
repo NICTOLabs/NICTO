@@ -139,6 +139,14 @@ class NICTOMasterConfig:
     mod_entropy_weight: float = 0.01
     exit_entropy_weight: float = 0.01
 
+    # Top Model (Cognitive Executive)
+    use_top_model: bool = True
+    top_model_layers: int = 2
+
+    # Reward System
+    use_reward_system: bool = True
+    reward_loss_weight: float = 0.05
+
 
 # ──────────────────────────────────────────────
 # PRETRAINED CONFIGS
@@ -158,6 +166,7 @@ def config_master_tiny() -> NICTOMasterConfig:
         vision_layers=2, vision_heads=2,
         audio_mel_bins=16, audio_max_frames=32, audio_dim=16, audio_layers=1,
         deepsearch_depth=4, deepsearch_beam=4,
+        top_model_layers=1,
     )
 
 
@@ -171,6 +180,7 @@ def config_master_100m() -> NICTOMasterConfig:
         prs_dim=128, prs_n_heads=2,
         memory_layers=2, emotional_layers=2, creative_layers=2,
         consciousness_dim=64, looped_steps=8,
+        top_model_layers=2,
     )
 
 
@@ -184,6 +194,7 @@ def config_master_1b() -> NICTOMasterConfig:
         prs_dim=256, prs_n_heads=4,
         memory_layers=4, emotional_layers=4, creative_layers=4,
         consciousness_dim=256, looped_steps=12,
+        top_model_layers=2,
     )
 
 
@@ -197,6 +208,7 @@ def config_master_7b() -> NICTOMasterConfig:
         prs_dim=512, prs_n_heads=8,
         memory_layers=6, emotional_layers=6, creative_layers=6,
         consciousness_dim=512, looped_steps=16,
+        top_model_layers=3,
     )
 
 
@@ -215,6 +227,7 @@ def config_master_5t() -> NICTOMasterConfig:
         vision_layers=24, vision_heads=16,
         audio_mel_bins=80, audio_max_frames=2048, audio_dim=1024, audio_layers=8,
         deepsearch_depth=8, deepsearch_beam=16,
+        top_model_layers=4,
     )
 
 
@@ -319,7 +332,7 @@ class DeepSearchBlock(nn.Module):
                 h = self.think_proj(thoughts[b])
                 score = self.scorer(h)
                 candidates.append((h, score))
-            sorted_cands = sorted(candidates, key=lambda c: c[1], reverse=True)
+            sorted_cands = sorted(candidates, key=lambda c: c[1].mean().item(), reverse=True)
             thoughts = [c[0] for c in sorted_cands[:self.beam_width]]
         best = thoughts[0]
         best_seq = best.expand(-1, L, -1)
@@ -362,10 +375,14 @@ class HierarchicalMemoryBlock(nn.Module):
 # ──────────────────────────────────────────────
 
 class UncertaintyEstimator(nn.Module):
-    """Self-monitoring: prediction entropy + error detection."""
+    """Self-monitoring: per-token uncertainty + calibration."""
     def __init__(self, dim: int):
         super().__init__()
-        self.monitor = nn.Sequential(
+        self.per_token_monitor = nn.Sequential(
+            nn.Linear(dim, dim // 4), nn.SiLU(),
+            nn.Linear(dim // 4, 1), nn.Sigmoid(),
+        )
+        self.sequence_monitor = nn.Sequential(
             nn.Linear(dim, dim // 4), nn.SiLU(),
             nn.Linear(dim // 4, 1), nn.Sigmoid(),
         )
@@ -375,23 +392,236 @@ class UncertaintyEstimator(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, logits: Optional[torch.Tensor] = None) -> Dict:
-        uncertainty = self.monitor(x.mean(dim=1))
+        token_unc = self.per_token_monitor(x).squeeze(-1)   # (B, L)
+        seq_unc = self.sequence_monitor(x.mean(dim=1))       # (B, 1)
         entropy = None
         if logits is not None:
             probs = F.softmax(logits, dim=-1)
             entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=-1).mean()
-            uncertainty = uncertainty + self.calibrate(entropy.detach().unsqueeze(-1))
-        return {"uncertainty": uncertainty, "entropy": entropy}
+            seq_unc = seq_unc + self.calibrate(entropy.detach().unsqueeze(-1))
+        combined = (token_unc + seq_unc).clamp(0, 1)
+        return {"uncertainty": combined, "entropy": entropy}
 
 
 # ──────────────────────────────────────────────
-# 9. MASTER MODEL
+# 10. REWARD SYSTEM
+# ──────────────────────────────────────────────
+
+class SubsystemRewardHead(nn.Module):
+    """Scores a subsystem's proposal on a single reward dimension."""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.score = nn.Sequential(
+            nn.Linear(dim, dim // 4), nn.SiLU(),
+            nn.Linear(dim // 4, 1), nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.score(x.mean(dim=1)).squeeze(-1)  # (B,)
+
+
+class RewardSystem(nn.Module):
+    """
+    Multi-dimensional reward scoring for subsystem proposals.
+
+    Each subsystem is scored on 4 dimensions:
+      - coherence:   grammatical/semantic correctness
+      - relevance:   contextual appropriateness
+      - creativity:  novelty and diversity
+      - safety:      freedom from harmful content
+
+    The reward system produces:
+      - Per-subsystem reward scores (B, n_subsystems)
+      - Reward-weighted proposals for the CognitiveExecutive
+      - Auxiliary reward loss for training signal
+    """
+    REWARD_DIMS = ["coherence", "relevance", "creativity", "safety"]
+
+    def __init__(self, dim: int, n_subsystems: int = 5):
+        super().__init__()
+        self.n_subsystems = n_subsystems
+
+        # Per-subsystem, per-dimension reward heads
+        self.reward_heads = nn.ModuleDict({
+            name: nn.ModuleList([
+                SubsystemRewardHead(dim) for _ in range(n_subsystems)
+            ])
+            for name in self.REWARD_DIMS
+        })
+
+        # Meta-reward combiner: learns to weight reward dimensions
+        self.meta_combiner = nn.Sequential(
+            nn.Linear(n_subsystems * len(self.REWARD_DIMS), n_subsystems),
+            nn.Sigmoid(),
+        )
+
+        # Reward-to-weight projection for CognitiveExecutive
+        self.reward_to_weight = nn.Sequential(
+            nn.Linear(n_subsystems + 1, n_subsystems),
+            nn.Softmax(dim=-1),
+        )
+
+    def forward(self, subsystem_outputs: List[torch.Tensor],
+                uncertainty: torch.Tensor) -> Dict:
+        """
+        Args:
+            subsystem_outputs: list of (B, L, D) from each subsystem
+            uncertainty: (B, L) per-token uncertainty
+        Returns:
+            Dict with:
+              - reward_scores: (B, n_subsystems) combined reward per subsystem
+              - reward_weights: (B, n_subsystems) attention weights for Top Model
+              - per_dim_scores: dict of (B, n_subsystems) per-dimension scores
+              - reward_loss: scalar auxiliary loss
+        """
+        B = subsystem_outputs[0].size(0)
+
+        # Score each subsystem on each dimension
+        per_dim_scores = {}
+        all_dim_scores = []
+        for dim_name in self.REWARD_DIMS:
+            scores = []
+            for i, head in enumerate(self.reward_heads[dim_name]):
+                scores.append(head(subsystem_outputs[i]))
+            stacked = torch.stack(scores, dim=1)  # (B, n_subsystems)
+            per_dim_scores[dim_name] = stacked
+            all_dim_scores.append(stacked)
+
+        # Concatenate all dimension scores
+        all_scores = torch.cat(all_dim_scores, dim=-1)  # (B, n_sub * n_dims)
+
+        # Meta-combine to get per-subsystem reward
+        reward_scores = self.meta_combiner(all_scores)  # (B, n_subsystems)
+
+        # Compute reward weights using uncertainty
+        seq_unc = uncertainty.mean(dim=1)  # (B,)
+        reward_input = torch.cat([reward_scores, seq_unc.unsqueeze(-1)], dim=-1)
+        reward_weights = self.reward_to_weight(reward_input)  # (B, n_subsystems)
+
+        # Auxiliary loss: encourage diverse but high reward across subsystems
+        # Subsystems should not all get the same reward
+        reward_variance = reward_scores.var(dim=1).mean()
+        reward_mean = reward_scores.mean()
+        reward_loss = (1.0 - reward_mean) + 0.1 * (1.0 - reward_variance)
+
+        return {
+            "reward_scores": reward_scores,
+            "reward_weights": reward_weights,
+            "per_dim_scores": per_dim_scores,
+            "reward_loss": reward_loss,
+        }
+
+
+# ──────────────────────────────────────────────
+# 11. COGNITIVE EXECUTIVE (Top Model)
+# ──────────────────────────────────────────────
+
+class CognitiveExecutive(nn.Module):
+    """
+    The top model — cognitive executive.
+
+    Receives competing token proposals from all subsystems, weighted by
+    the RewardSystem, and makes the final decision via cross-attention reasoning.
+
+    Architecture:
+      1. Each subsystem has a lightweight proposal head
+      2. Proposals are weighted by reward scores
+      3. Weighted proposals are concatenated and fused
+      4. Uncertainty-aware gating further modulates the signal
+      5. Self-attention reasoning layers process the result
+      6. Residual connection to meta-fused output
+      7. Shared output head produces final logits
+    """
+    def __init__(self, dim: int, n_heads: int, n_subsystems: int = 5,
+                 n_layers: int = 2):
+        super().__init__()
+        self.n_subsystems = n_subsystems
+
+        # Per-subsystem proposal heads (lightweight linear projections)
+        self.proposal_heads = nn.ModuleList([
+            nn.Linear(dim, dim) for _ in range(n_subsystems)
+        ])
+
+        # Fusion: concatenate weighted proposals → single representation
+        self.fusion = nn.Sequential(
+            nn.Linear(dim * n_subsystems, dim), nn.SiLU(),
+            nn.Linear(dim, dim),
+        )
+
+        # Uncertainty-aware gating
+        self.unc_gate = nn.Sequential(
+            nn.Linear(dim + 1, dim), nn.Sigmoid(),
+        )
+
+        # Reasoning layers (self-attention over fused proposals)
+        self.layers = nn.ModuleList([
+            nn.TransformerEncoderLayer(
+                dim, n_heads, dim * 4,
+                activation=F.gelu, batch_first=True, norm_first=True,
+            )
+            for _ in range(n_layers)
+        ])
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, fused: torch.Tensor,
+                subsystem_outputs: List[torch.Tensor],
+                uncertainty: torch.Tensor,
+                reward_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Args:
+            fused: (B, L, D) from meta-fusion gate
+            subsystem_outputs: list of (B, L, D) from each subsystem
+            uncertainty: (B, L) per-token uncertainty
+            reward_weights: (B, n_subsystems) from RewardSystem
+        Returns:
+            (B, L, D) refined representation
+        """
+        B, L, D = fused.shape
+
+        # Project each subsystem's output through its proposal head
+        projected = []
+        for i, out in enumerate(subsystem_outputs):
+            h = self.proposal_heads[i](out)  # (B, L, D)
+
+            # Apply reward weighting if available
+            if reward_weights is not None:
+                w = reward_weights[:, i].unsqueeze(-1).unsqueeze(-1)  # (B, 1, 1)
+                h = h * w
+
+            projected.append(h)
+
+        # Concatenate and fuse
+        concat = torch.cat(projected, dim=-1)  # (B, L, n_sub * D)
+        h = self.fusion(concat)                 # (B, L, D)
+
+        # Uncertainty-aware gating: trust uncertain subsystems less
+        unc = uncertainty.unsqueeze(-1)         # (B, L, 1)
+        gate = self.unc_gate(torch.cat([h, unc], dim=-1))
+        h = h * gate
+
+        # Reasoning layers
+        for layer in self.layers:
+            h = layer(h)
+        h = self.norm(h)
+
+        # Residual connection to meta-fused output
+        h = h + fused
+
+        return h
+
+
+# ──────────────────────────────────────────────
+# 10. MASTER MODEL
 # ──────────────────────────────────────────────
 
 class NICTOMasterModel(nn.Module):
     """
     NICTO MASTER — the ultimate NICTO architecture.
     Everything integrated into one unified system.
+
+    Architecture:
+      Bottom stack: NOVA → Looped → Subsystems → NeuralBus → DeepSearch → Meta-Fusion
+      Top model:    CognitiveExecutive (cross-attention over subsystem proposals)
     """
     def __init__(self, config: NICTOMasterConfig):
         super().__init__()
@@ -476,6 +706,17 @@ class NICTOMasterModel(nn.Module):
 
         # ── Meta-Fusion Gate ──
         self.meta_fusion = MetaFusionGate(d, 5)
+
+        # ── Top Model (Cognitive Executive) ──
+        self.top_model = None
+        self.reward_system = None
+        if config.use_top_model:
+            self.top_model = CognitiveExecutive(
+                d, config.n_heads, n_subsystems=5,
+                n_layers=config.top_model_layers,
+            )
+            if config.use_reward_system:
+                self.reward_system = RewardSystem(d, n_subsystems=5)
 
         # ── Output ──
         self.norm = RMSNorm(d, config.norm_eps)
@@ -606,7 +847,28 @@ class NICTOMasterModel(nn.Module):
         # ── Meta-Fusion ──
         fused = self.meta_fusion(ds_out, mem_out, emo_out, cre_out, con_out)
         fused = fused + bus_out
-        x = self.norm(fused)
+
+        # ── Top Model (Cognitive Executive) ──
+        reward_loss = torch.tensor(0.0, device=x.device)
+        if self.top_model is not None:
+            subsystem_outputs = [mem_out, emo_out, cre_out, con_out, hmem_out]
+
+            reward_weights = None
+            if self.reward_system is not None:
+                reward_result = self.reward_system(
+                    subsystem_outputs, uncertainty["uncertainty"]
+                )
+                reward_weights = reward_result["reward_weights"]
+                reward_loss = reward_result["reward_loss"]
+
+            h = self.top_model(
+                fused, subsystem_outputs, uncertainty["uncertainty"],
+                reward_weights=reward_weights,
+            )
+        else:
+            h = fused
+
+        x = self.norm(h)
         logits = self.out_up(self.out_down(x))
 
         # ── Loss ──
@@ -623,11 +885,13 @@ class NICTOMasterModel(nn.Module):
                 loss = loss + self.config.moe_aux_loss_weight * aux_loss
                 loss = loss + self.config.mod_entropy_weight * self._mod_entropy(mod_probs_all)
                 loss = loss + self.config.exit_entropy_weight * exit_entropy
+                loss = loss + self.config.reward_loss_weight * reward_loss
 
         return {
             "logits": logits, "loss": loss, "aux_loss": aux_loss,
             "uncertainty": uncertainty["uncertainty"],
             "mod_probs": mod_probs_all,
+            "reward_loss": reward_loss,
         }
 
     def _mod_entropy(self, mod_probs_all):

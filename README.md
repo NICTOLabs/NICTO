@@ -1,10 +1,10 @@
 # NICTO
 
-**Neural Integrated Cognitive Transformer Architecture** — a cognitive language model with parallel reasoning paths, memory, emotion, creativity, and self-monitoring, fused into one unified system.
+**Neural Integrated Cognitive Transformer Architecture** — a cognitive language model with parallel reasoning paths, memory, emotion, creativity, and self-monitoring, fused into one unified system with a reward-guided cognitive executive.
 
 ## Architecture
 
-NICTO is not just a transformer. Every forward pass runs **10 integrated components** in parallel, fused by learned gating:
+NICTO is not just a transformer. Every forward pass runs **12 integrated components** in parallel, fused by learned gating:
 
 ```
 Input (text + optional images + optional audio)
@@ -17,7 +17,32 @@ Input (text + optional images + optional audio)
   → NeuralBus (cross-network priority attention)
   → DeepSearch (beam-search for hard tokens)
   → Meta-Fusion Gate (learned weights over ALL outputs)
+  → Reward System (multi-dimensional scoring of subsystem proposals)
+  → Cognitive Executive / Top Model (reward-weighted cross-attention reasoning)
   → Next token
+```
+
+### Two-Tier Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│  TOP MODEL: Cognitive Executive                      │
+│  ┌─────────────────────────────────────────────────┐ │
+│  │ Per-subsystem Proposal Heads                     │ │
+│  │ Uncertainty-Aware Gating                         │ │
+│  │ Self-Attention Reasoning Layers                  │ │
+│  │ Residual Connection                              │ │
+│  └─────────────────────────────────────────────────┘ │
+│         ↑ Reward weights ↑ Uncertainty scores         │
+│  ┌─────────────────────────────────────────────────┐ │
+│  │ Reward System                                    │ │
+│  │ Coherence · Relevance · Creativity · Safety      │ │
+│  └─────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────┤
+│  BOTTOM STACK: NOVA + Subsystems                     │
+│  NOVA Core → Looped → 5 Subsystems → NeuralBus →    │
+│  DeepSearch → Meta-Fusion Gate                       │
+└─────────────────────────────────────────────────────┘
 ```
 
 ### Components
@@ -30,16 +55,18 @@ Input (text + optional images + optional audio)
 | **NeuralBus** | Cross-network attention where each subsystem attends to the others |
 | **DeepSearch** | Multi-step beam search over future tokens for uncertain positions |
 | **Meta-Fusion Gate** | `softmax(W · concat[core, mem, emo, cre, con])` — learned per-token subsystem weighting |
+| **Reward System** | Scores each subsystem on coherence, relevance, creativity, safety; produces softmax weights |
+| **Cognitive Executive** | Top model: receives reward-weighted proposals from all subsystems, applies uncertainty gating, runs self-attention reasoning, outputs final logits |
 
 ### Config Scales
 
-| Config | Params | dim | layers | MoE experts | looped steps |
-|--------|--------|-----|--------|-------------|-------------|
-| Tiny | 7.9M | 128 | 2 | 2 | 4 |
-| 100M | 608M | 768 | 12 | 4 | 8 |
-| 1B | ~1B | 2048 | 24 | 8 | 12 |
-| 7B | ~7B | 4096 | 32 | 8 | 16 |
-| 5T | ~5T | 8192 | 96 | **512** | **32** |
+| Config | Params | dim | layers | MoE experts | looped steps | top model layers |
+|--------|--------|-----|--------|-------------|-------------|-----------------|
+| Tiny | 8.3M | 128 | 2 | 2 | 4 | 1 |
+| 100M | 632M | 768 | 12 | 4 | 8 | 2 |
+| 1B | ~1B | 2048 | 24 | 8 | 12 | 2 |
+| 7B | ~7B | 4096 | 32 | 8 | 16 | 3 |
+| 5T | ~5T | 8192 | 96 | **512** | **32** | 4 |
 
 ## Quick Start
 
@@ -113,6 +140,9 @@ Currently **17.4M pre-tokenized tokens** from 4 open-source datasets (OASST1, C4
 - [x] Text+audio forward (validated)
 - [x] Generation (validated)
 - [x] Data pipeline with streaming downloads (validated)
+- [x] Cognitive Executive (Top Model) integrated
+- [x] Reward System (4-dimensional scoring) integrated
+- [x] Per-token uncertainty estimation
 - [ ] Full training run (needs GPU)
 - [ ] Evaluation (MMLU, HumanEval, etc.)
 - [ ] Cognitive subsystem ablation studies
