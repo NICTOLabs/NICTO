@@ -170,6 +170,42 @@ def config_master_tiny() -> NICTOMasterConfig:
     )
 
 
+def config_master_medium() -> NICTOMasterConfig:
+    """Medium config — ~30-40M params, trainable on CPU in reasonable time."""
+    return NICTOMasterConfig(
+        vocab_size=32000, dim=256, n_heads=8, n_kv_heads=4,
+        n_layers=6, max_seq_len=2048, ffn_dim=768,
+        ssm_d_state=8, ssm_d_conv=3, ssm_expand=2,
+        attn_window_size=64, attn_n_global_tokens=16,
+        moe_experts=4, moe_activated_min=1, moe_activated_max=2,
+        prs_dim=64, prs_n_heads=4,
+        memory_layers=2, emotional_layers=2, creative_layers=2,
+        consciousness_dim=64, looped_steps=8,
+        image_size=64, patch_size=8, vision_dim=64,
+        vision_layers=3, vision_heads=4,
+        audio_mel_bins=32, audio_max_frames=128, audio_dim=32, audio_layers=2,
+        deepsearch_depth=4, deepsearch_beam=4,
+        top_model_layers=2,
+    )
+
+
+def config_master_200m() -> NICTOMasterConfig:
+    """200M config — largest model that fits in 8GB RAM with AdamW."""
+    return NICTOMasterConfig(
+        vocab_size=32000, dim=512, n_heads=8, n_kv_heads=4,
+        n_layers=12, max_seq_len=2048, ffn_dim=1536,
+        ssm_d_state=8, ssm_d_conv=3, ssm_expand=2,
+        attn_window_size=64, attn_n_global_tokens=16,
+        moe_experts=4, moe_activated_min=1, moe_activated_max=3,
+        prs_dim=128, prs_n_heads=4,
+        memory_layers=3, emotional_layers=3, creative_layers=3,
+        consciousness_dim=128, looped_steps=10,
+        cross_attn_every=3,
+        deepsearch_depth=4, deepsearch_beam=4,
+        top_model_layers=2,
+    )
+
+
 def config_master_100m() -> NICTOMasterConfig:
     return NICTOMasterConfig(
         vocab_size=32000, dim=768, n_heads=12, n_kv_heads=4,
@@ -209,6 +245,22 @@ def config_master_7b() -> NICTOMasterConfig:
         memory_layers=6, emotional_layers=6, creative_layers=6,
         consciousness_dim=512, looped_steps=16,
         top_model_layers=3,
+    )
+
+
+def config_master_3b() -> NICTOMasterConfig:
+    """3B parameter config — target for distillation from medium teacher."""
+    return NICTOMasterConfig(
+        vocab_size=32000, dim=1536, n_heads=24, n_kv_heads=8,
+        n_layers=24, max_seq_len=2048, ffn_dim=4096,
+        ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
+        attn_window_size=128, attn_n_global_tokens=32,
+        moe_experts=8, moe_activated_min=2, moe_activated_max=4,
+        prs_dim=256, prs_n_heads=8,
+        memory_layers=4, emotional_layers=4, creative_layers=4,
+        consciousness_dim=256, looped_steps=12,
+        deepsearch_depth=4, deepsearch_beam=4,
+        top_model_layers=2,
     )
 
 

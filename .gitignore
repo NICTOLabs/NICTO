@@ -26,12 +26,15 @@ NICTO/
 # Logs & checkpoints
 *.log
 checkpoints/
+checkpoints_master/
 checkpoints_looped/
 checkpoints_v2/
 logs/
 
 # Training data
 *.jsonl
+*.bin
+training_data/
 training_data.json
 
 # C++ build
@@ -40,3 +43,14 @@ cmake-build-*/
 *.cmake
 Makefile
 CMakeCache.txt
+
+# Temp files
+*.zip
+*.pid
+*.bat
+*.vbs
+medium_train_detached.log
+medium_train_ps.log
+medium_bg.log
+
+.env

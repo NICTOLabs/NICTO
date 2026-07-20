@@ -130,6 +130,9 @@ class MMapDataset(Dataset):
         self.seq_len = seq_len
         self.bin_path = Path(bin_path)
 
+        if self.bin_path.stat().st_size == 0:
+            raise ValueError(f"Empty .bin file: {self.bin_path}")
+
         # Memory-map the file
         self.data = np.memmap(str(self.bin_path), dtype=np.uint16, mode="r")
         self.n_tokens = len(self.data)
@@ -170,9 +173,16 @@ class MixedMMapDataset(Dataset):
         total_weight = sum(w for _, w in configs)
 
         for path, weight in configs:
-            ds = MMapDataset(path, seq_len)
-            self.datasets.append(ds)
-            self.weights.append(weight / total_weight)
+            try:
+                ds = MMapDataset(path, seq_len)
+                if len(ds) > 0:
+                    self.datasets.append(ds)
+                    self.weights.append(weight / total_weight)
+            except (ValueError, Exception) as e:
+                print(f"  Skipping {path}: {e}")
+
+        if not self.datasets:
+            raise ValueError("No valid datasets loaded!")
 
         # Build cumulative sizes for weighted sampling
         cumulative = 0

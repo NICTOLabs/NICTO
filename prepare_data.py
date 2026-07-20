@@ -115,6 +115,12 @@ def extract_text(record: dict, dataset: str) -> Optional[str]:
                 parts.append(val)
         text = "\n\n".join(parts)
         return clean_text(text) if text and len(text) > 30 else None
+    elif dataset == "pile":
+        text = record.get("text", "")
+        return clean_text(text) if text else None
+    elif dataset == "redpajama":
+        text = record.get("text", "")
+        return clean_text(text) if text else None
     return None
 
 
@@ -126,12 +132,14 @@ DATASET_CONFIGS = {
         "split": "train",
         "description": "OpenAssistant conversations (Apache-2.0)",
         "weight": 1.0,
+        "max_samples": 500_000,
     },
     "dolly": {
         "hf_path": "databricks/databricks-dolly-15k",
         "split": "train",
         "description": "Dolly 15K human-written QA (CC-BY-SA)",
         "weight": 0.5,
+        "max_samples": 100_000,
     },
     "c4": {
         "hf_path": "allenai/c4",
@@ -139,20 +147,51 @@ DATASET_CONFIGS = {
         "description": "C4 - Colossal Clean Crawled Corpus (ODC-By)",
         "weight": 3.0,
         "subset": "en",
-        "max_samples": 100_000,
+        "max_samples": 500_000,
     },
     "alpaca": {
         "hf_path": "tatsu-lab/alpaca",
         "split": "train",
         "description": "Alpaca 52K instructions (CC-BY-NC 4.0)",
         "weight": 0.5,
+        "max_samples": 200_000,
     },
     "openorca": {
         "hf_path": "Open-Orca/OpenOrca",
         "split": "train",
         "description": "OpenOrca instruction data (Apache-2.0)",
         "weight": 1.0,
-        "max_samples": 200_000,
+        "max_samples": 500_000,
+    },
+    "wikipedia": {
+        "hf_path": "wikimedia/wikipedia",
+        "split": "train",
+        "description": "Wikipedia encyclopedia (CC-BY-SA)",
+        "weight": 2.0,
+        "subset": "20231101.en",
+        "max_samples": 500_000,
+    },
+    "fineweb": {
+        "hf_path": "HuggingFaceFW/fineweb",
+        "split": "train",
+        "description": "FineWeb high-quality web text (ODC-By)",
+        "weight": 3.0,
+        "subset": "sample-100BT",
+        "max_samples": 500_000,
+    },
+    "pile": {
+        "hf_path": "EleutherAI/the_pile_deduplicated",
+        "split": "train",
+        "description": "The Pile deduplicated (various)",
+        "weight": 2.0,
+        "max_samples": 300_000,
+    },
+    "redpajama": {
+        "hf_path": "togethercomputer/RedPajama-Data-1T-Sample",
+        "split": "train",
+        "description": "RedPajama 1T sample (various licenses)",
+        "weight": 2.0,
+        "max_samples": 500_000,
     },
 }
 

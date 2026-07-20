@@ -20,7 +20,8 @@ from torch.optim import AdamW
 
 from nicto_ai.training.model_master import (
     NICTOMasterModel, NICTOMasterConfig,
-    config_master_tiny, config_master_100m, config_master_1b, config_master_7b,
+    config_master_tiny, config_master_medium, config_master_200m,
+    config_master_100m, config_master_1b, config_master_7b,
 )
 from nicto_ai.training.data_pipeline_v2 import MMapDataset, MixedMMapDataset, create_dataloader
 
@@ -44,10 +45,17 @@ def get_config(name: str) -> NICTOMasterConfig:
     name = name.lower()
     if name in ("tiny", "t"):
         return config_master_tiny()
+    elif name in ("medium", "med", "m"):
+        return config_master_medium()
+    elif name in ("200m", "200"):
+        return config_master_200m()
     elif name in ("100m", "100"):
         return config_master_100m()
     elif name in ("1b", "1"):
         return config_master_1b()
+    elif name in ("3b", "3"):
+        from nicto_ai.training.model_master import config_master_3b
+        return config_master_3b()
     elif name in ("7b", "7"):
         return config_master_7b()
     else:
@@ -64,6 +72,8 @@ def get_data_sources(data_dir: str = "training_data") -> list:
     }
     for f in sorted(data_dir.glob("*.bin")):
         name = f.stem
+        if f.stat().st_size == 0:
+            continue
         weight = weights_map.get(name, 1.0)
         sources.append((str(f), weight))
         log(f"  Data: {name:12s}  weight={weight}")
@@ -97,7 +107,7 @@ def main():
         log(f"Device: {device}")
 
     cfg = get_config(args.config)
-    log(f"Device: cpu")
+    log(f"Device: {device}")
     log(f"Config: {args.config} ({cfg.dim}d, {cfg.n_layers} layers, {cfg.n_heads} heads)")
     log(f"Params: {sum(p.numel() for p in NICTOMasterModel(cfg).parameters()):,}")
     log(f"Batch: {args.batch_size}, Steps: {args.steps}, Seq len: {args.seq_len}")
