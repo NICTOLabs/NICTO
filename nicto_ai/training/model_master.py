@@ -331,6 +331,9 @@ class NeuralBus(nn.Module):
         self.projections = nn.ModuleList([
             nn.Linear(dim, dim) for _ in range(n_networks)
         ])
+        self.other_proj = nn.ModuleList([
+            nn.Linear(dim, dim) for _ in range(n_networks)
+        ])
         self.fusion = nn.Sequential(
             nn.Linear(dim * n_networks, dim), nn.SiLU(), nn.Linear(dim, dim),
         )
@@ -339,20 +342,22 @@ class NeuralBus(nn.Module):
         )
 
     def forward(self, network_outputs: List[torch.Tensor]) -> torch.Tensor:
-        B = network_outputs[0].size(0)
-        projected = [p(o.mean(dim=1)) for p, o in zip(self.projections, network_outputs)]
+        B, L, D = network_outputs[0].shape
+        projected = [p(o) for p, o in zip(self.projections, network_outputs)]
         attended = []
         for i in range(self.n_networks):
-            query = network_outputs[i].mean(dim=1, keepdim=True)
-            others = torch.stack([
-                o.mean(dim=1) for j, o in enumerate(network_outputs) if j != i
-            ], dim=1)
-            out, _ = self.cross_attn[i](query, others, others)
-            attended.append(out.squeeze(1))
-        fused = self.fusion(torch.cat(attended, dim=-1))
+            query = network_outputs[i]
+            others_mean = sum(
+                o.mean(dim=1, keepdim=True)
+                for j, o in enumerate(network_outputs) if j != i
+            ) / max(self.n_networks - 1, 1)
+            other_proj = self.other_proj[i](others_mean).expand(-1, L, -1)
+            out, _ = self.cross_attn[i](query, other_proj, other_proj)
+            attended.append(out)
+        fused = self.fusion(torch.cat([a.mean(dim=1) for a in attended], dim=-1))
         gates = self.priority_gate(fused)
-        scaled = [projected[i] * gates[:, i:i+1] for i in range(self.n_networks)]
-        final = self.fusion(torch.cat(scaled, dim=-1))
+        scaled = [projected[i] * gates[:, i:i+1].unsqueeze(1) for i in range(self.n_networks)]
+        final = sum(scaled)
         return final
 
 
@@ -376,9 +381,10 @@ class DeepSearchBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, L, D = x.shape
+        depth = self.max_depth if not self.training else min(2, self.max_depth)
         x_flat = x.mean(dim=1)
         thoughts = [self.think_proj(x_flat).unsqueeze(1) for _ in range(self.beam_width)]
-        for depth in range(self.max_depth):
+        for depth in range(depth):
             candidates = []
             for b in range(self.beam_width):
                 h = self.think_proj(thoughts[b])
@@ -410,13 +416,24 @@ class HierarchicalMemoryBlock(nn.Module):
         self.read_attn = nn.MultiheadAttention(dim, 4, batch_first=True)
         self.pointer = nn.Parameter(torch.zeros(1))
         self.norm = RMSNorm(dim)
+        self._step = 0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, L, D = x.shape
         x_mean = x.mean(dim=1, keepdim=True)
         working = self.working_memory(x_mean)
+
         write_idx = int(self.pointer.item()) % self.capacity
+        gate = torch.sigmoid(self.write_gate(torch.cat([working, x_mean], dim=-1)))
+        self.episodic.data[:, write_idx:write_idx+1] = (
+            (1 - gate) * self.episodic.data[:, write_idx:write_idx+1] + gate * working
+        )
         self.pointer.data += 1
+
+        self._step += 1
+        if self.training and self._step % 100 == 0:
+            self.semantic.data = 0.99 * self.semantic.data + 0.01 * self.episodic.data
+
         mem = self.episodic.expand(B, -1, -1)
         mem_out, _ = self.read_attn(x, mem, mem)
         return self.norm(x + mem_out)
@@ -886,12 +903,13 @@ class NICTOMasterModel(nn.Module):
         uncertainty = self.uncertainty(core_output)
 
         # ── NeuralBus ──
-        bus_flat = self.neural_bus([mem_out, emo_out, cre_out, con_out, hmem_out]) if self.config.use_neural_bus else \
-                   (mem_out + emo_out + cre_out + con_out + hmem_out).mean(dim=1) / 5
-        bus_out = bus_flat.unsqueeze(1).expand(-1, core_output.size(1), -1)
+        if self.config.use_neural_bus:
+            bus_out = self.neural_bus([mem_out, emo_out, cre_out, con_out, hmem_out])
+        else:
+            bus_out = (mem_out + emo_out + cre_out + con_out + hmem_out) / 5
 
         # ── DeepSearch ──
-        if self.config.use_deepsearch and not self.training:
+        if self.config.use_deepsearch:
             ds_out = self.deepsearch(core_output)
         else:
             ds_out = core_output

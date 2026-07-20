@@ -348,7 +348,7 @@ class MoDRouter(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        probs = self.router(x.mean(dim=1))
+        probs = self.router(x)
         mask = (probs > self.threshold).float()
         return x, mask, probs
 
@@ -455,6 +455,9 @@ class CreativeSubsystem(nn.Module):
         h = self.norm(x)
         for layer in self.layers:
             h = h + layer(h, src_mask=self.causal_mask[:x.size(1), :x.size(1)])
+        if self.training:
+            noise = self.noise_proj(h) * torch.randn_like(h) * 0.1
+            h = h + noise
         return h
 
 
@@ -511,7 +514,7 @@ class UnifiedNOVABlock(nn.Module):
         attn_out = self.attn(self.attn_norm(x))
         moe_out, aux_loss = self.moe(self.moe_norm(x))
         fused = self.fusion(ssm_out, attn_out, moe_out)
-        x = x + fused * mod_mask.unsqueeze(-1)
+        x = x + fused * mod_mask
         if self.use_prs:
             x, prs_state = self.prs(x, prs_state)
         return x, aux_loss, prs_state, mod_probs
