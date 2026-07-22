@@ -186,7 +186,7 @@ class SelectiveSSM(nn.Module):
     def __init__(self, dim: int, d_state: int = 16, d_conv: int = 4, expand: int = 2):
         super().__init__()
         self.d_state = d_state
-        self.d_conv = d_conv
+        self.expand = expand
         d_inner = dim * expand
 
         # Input projection
@@ -212,7 +212,7 @@ class SelectiveSSM(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, L, D = x.shape
-        d_inner = D * self.config_expand if hasattr(self, 'config_expand') else D * 2
+        d_inner = D * self.expand
 
         # Split into x and z (gating)
         xz = self.in_proj(x)  # (B, L, 2*d_inner)
@@ -395,9 +395,14 @@ class VariableMoE(nn.Module):
         top_k_val, top_k_idx = torch.topk(gates, self.n_max, dim=-1)
         top_k_val = top_k_val / top_k_val.sum(dim=-1, keepdim=True)
 
+        # Use difficulty to mask out lower-priority experts
+        # n_active_int: (B*L, 1) — how many experts each token should use
+        expert_rank = torch.arange(self.n_experts, device=x.device).unsqueeze(0)  # (1, n_experts)
+        expert_mask = expert_rank < n_active_int  # (B*L, n_experts)
+
         output = torch.zeros_like(flat)
         for i, expert in enumerate(self.experts):
-            mask = (top_k_idx == i).any(dim=-1)
+            mask = (top_k_idx == i).any(dim=-1) & expert_mask[:, i]
             if mask.any():
                 out = expert(flat[mask])
                 w = (top_k_idx == i).float().sum(dim=-1, keepdim=True)[mask]
@@ -632,6 +637,8 @@ class NOVAModel(nn.Module):
         for pn, p in self.named_parameters():
             if pn.endswith("wo.weight") or pn.endswith("out_proj.weight"):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layers))
+        # Re-initialize factored output head AFTER _init_weights (which overwrites it)
+        nn.init.normal_(self.out_up.weight, mean=0.0, std=0.02)
 
         self.count_parameters()
 

@@ -91,6 +91,15 @@ class NICTOMasterConfig:
     attn_window_size: int = 256
     attn_n_global_tokens: int = 64
 
+    # SSA (Subquadratic Sparse Attention)
+    ssa_block_size: int = 128
+    ssa_top_k: int = 2
+    ssa_local_window: int = 1
+    ssa_beta: float = 2.0
+
+    # Resonance Attention
+    resonance_window: int = 64
+
     # NOVA MoE
     moe_experts: int = 8
     moe_activated_min: int = 1
@@ -158,6 +167,8 @@ def config_master_tiny() -> NICTOMasterConfig:
         n_layers=2, max_seq_len=2048, ffn_dim=256,
         ssm_d_state=4, ssm_d_conv=2, ssm_expand=2,
         attn_window_size=32, attn_n_global_tokens=4,
+        ssa_block_size=16, ssa_top_k=1, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=16,
         moe_experts=2, moe_activated_min=1, moe_activated_max=2,
         prs_dim=32, prs_n_heads=2,
         memory_layers=1, emotional_layers=1, creative_layers=1,
@@ -177,6 +188,8 @@ def config_master_medium() -> NICTOMasterConfig:
         n_layers=6, max_seq_len=2048, ffn_dim=768,
         ssm_d_state=8, ssm_d_conv=3, ssm_expand=2,
         attn_window_size=64, attn_n_global_tokens=16,
+        ssa_block_size=32, ssa_top_k=2, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=32,
         moe_experts=4, moe_activated_min=1, moe_activated_max=2,
         prs_dim=64, prs_n_heads=4,
         memory_layers=2, emotional_layers=2, creative_layers=2,
@@ -196,6 +209,8 @@ def config_master_200m() -> NICTOMasterConfig:
         n_layers=12, max_seq_len=2048, ffn_dim=1536,
         ssm_d_state=8, ssm_d_conv=3, ssm_expand=2,
         attn_window_size=64, attn_n_global_tokens=16,
+        ssa_block_size=32, ssa_top_k=2, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=32,
         moe_experts=4, moe_activated_min=1, moe_activated_max=3,
         prs_dim=128, prs_n_heads=4,
         memory_layers=3, emotional_layers=3, creative_layers=3,
@@ -212,6 +227,8 @@ def config_master_100m() -> NICTOMasterConfig:
         n_layers=12, max_seq_len=2048, ffn_dim=3072,
         ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=128, attn_n_global_tokens=32,
+        ssa_block_size=64, ssa_top_k=2, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=32,
         moe_experts=4, moe_activated_min=1, moe_activated_max=2,
         prs_dim=128, prs_n_heads=2,
         memory_layers=2, emotional_layers=2, creative_layers=2,
@@ -226,6 +243,8 @@ def config_master_1b() -> NICTOMasterConfig:
         n_layers=24, max_seq_len=4096, ffn_dim=5504,
         ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=256, attn_n_global_tokens=64,
+        ssa_block_size=128, ssa_top_k=2, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=64,
         moe_experts=8, moe_activated_min=1, moe_activated_max=3,
         prs_dim=256, prs_n_heads=4,
         memory_layers=4, emotional_layers=4, creative_layers=4,
@@ -240,6 +259,8 @@ def config_master_7b() -> NICTOMasterConfig:
         n_layers=32, max_seq_len=4096, ffn_dim=11008,
         ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=256, attn_n_global_tokens=64,
+        ssa_block_size=128, ssa_top_k=3, ssa_local_window=2, ssa_beta=2.0,
+        resonance_window=128,
         moe_experts=8, moe_activated_min=2, moe_activated_max=4,
         prs_dim=512, prs_n_heads=8,
         memory_layers=6, emotional_layers=6, creative_layers=6,
@@ -255,6 +276,8 @@ def config_master_3b() -> NICTOMasterConfig:
         n_layers=24, max_seq_len=2048, ffn_dim=4096,
         ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=128, attn_n_global_tokens=32,
+        ssa_block_size=64, ssa_top_k=2, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=64,
         moe_experts=8, moe_activated_min=2, moe_activated_max=4,
         prs_dim=256, prs_n_heads=8,
         memory_layers=4, emotional_layers=4, creative_layers=4,
@@ -271,6 +294,8 @@ def config_master_5t() -> NICTOMasterConfig:
         n_layers=96, max_seq_len=16384, ffn_dim=4096,
         ssm_d_state=32, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=512, attn_n_global_tokens=128,
+        ssa_block_size=256, ssa_top_k=4, ssa_local_window=2, ssa_beta=2.0,
+        resonance_window=256,
         moe_experts=512, moe_activated_min=4, moe_activated_max=8,
         prs_dim=1024, prs_n_heads=16,
         memory_layers=24, emotional_layers=24, creative_layers=24,
@@ -426,7 +451,7 @@ class HierarchicalMemoryBlock(nn.Module):
         write_idx = int(self.pointer.item()) % self.capacity
         gate = torch.sigmoid(self.write_gate(torch.cat([working, x_mean], dim=-1)))
         self.episodic.data[:, write_idx:write_idx+1] = (
-            (1 - gate) * self.episodic.data[:, write_idx:write_idx+1] + gate * working
+            (1 - gate[0:1]) * self.episodic.data[:, write_idx:write_idx+1] + gate[0:1] * working[0:1]
         )
         self.pointer.data += 1
 
@@ -791,12 +816,13 @@ class NICTOMasterModel(nn.Module):
         self.norm = RMSNorm(d, config.norm_eps)
         self.out_down = nn.Linear(d, d // 4, bias=False)
         self.out_up = nn.Linear(d // 4, config.vocab_size, bias=False)
-        self.out_up.weight = nn.Parameter(torch.randn(config.vocab_size, d // 4) * 0.02)
 
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
             if pn.endswith("wo.weight") or pn.endswith("out_proj.weight"):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layers))
+        # Re-initialize factored output head AFTER _init_weights
+        nn.init.normal_(self.out_up.weight, mean=0.0, std=0.02)
 
         self.count_parameters()
 
@@ -806,6 +832,8 @@ class NICTOMasterModel(nn.Module):
                      'max_seq_len', 'ffn_dim', 'norm_eps', 'rope_theta',
                      'ssm_d_state', 'ssm_d_conv', 'ssm_expand',
                      'attn_window_size', 'attn_n_global_tokens',
+                     'ssa_block_size', 'ssa_top_k', 'ssa_local_window', 'ssa_beta',
+                     'resonance_window',
                      'moe_experts', 'moe_activated_min', 'moe_activated_max',
                      'moe_aux_loss_weight', 'mod_threshold',
                      'prs_dim', 'prs_n_heads',

@@ -66,6 +66,13 @@ class NICTOUnifiedConfig:
     # Sparse attention (NOVA)
     attn_window_size: int = 256
     attn_n_global_tokens: int = 64
+    # SSA (Subquadratic Sparse Attention)
+    ssa_block_size: int = 128
+    ssa_top_k: int = 2
+    ssa_local_window: int = 1
+    ssa_beta: float = 2.0
+    # Resonance Attention
+    resonance_window: int = 64
     # MoE (NOVA)
     moe_experts: int = 8
     moe_activated_min: int = 1
@@ -95,6 +102,8 @@ def config_nicto_100m() -> NICTOUnifiedConfig:
         n_layers=12, max_seq_len=2048, ffn_dim=3072,
         ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=128, attn_n_global_tokens=32,
+        ssa_block_size=64, ssa_top_k=2, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=32,
         moe_experts=4, moe_activated_min=1, moe_activated_max=2,
         prs_dim=128, prs_n_heads=2,
         memory_layers=2, emotional_layers=2, creative_layers=2,
@@ -108,6 +117,8 @@ def config_nicto_350m() -> NICTOUnifiedConfig:
         n_layers=24, max_seq_len=2048, ffn_dim=4096,
         ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=128, attn_n_global_tokens=32,
+        ssa_block_size=64, ssa_top_k=2, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=32,
         moe_experts=6, moe_activated_min=1, moe_activated_max=3,
         prs_dim=128, prs_n_heads=4,
         memory_layers=3, emotional_layers=3, creative_layers=3,
@@ -121,6 +132,8 @@ def config_nicto_1b() -> NICTOUnifiedConfig:
         n_layers=24, max_seq_len=4096, ffn_dim=5504,
         ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=256, attn_n_global_tokens=64,
+        ssa_block_size=128, ssa_top_k=2, ssa_local_window=1, ssa_beta=2.0,
+        resonance_window=64,
         moe_experts=8, moe_activated_min=1, moe_activated_max=3,
         prs_dim=256, prs_n_heads=4,
         memory_layers=4, emotional_layers=4, creative_layers=4,
@@ -134,6 +147,8 @@ def config_nicto_7b() -> NICTOUnifiedConfig:
         n_layers=32, max_seq_len=4096, ffn_dim=11008,
         ssm_d_state=16, ssm_d_conv=4, ssm_expand=2,
         attn_window_size=256, attn_n_global_tokens=64,
+        ssa_block_size=128, ssa_top_k=3, ssa_local_window=2, ssa_beta=2.0,
+        resonance_window=128,
         moe_experts=8, moe_activated_min=2, moe_activated_max=4,
         prs_dim=512, prs_n_heads=8,
         memory_layers=6, emotional_layers=6, creative_layers=6,
@@ -195,6 +210,7 @@ class SelectiveSSM(nn.Module):
     def __init__(self, dim: int, d_state: int = 16, d_conv: int = 4, expand: int = 2):
         super().__init__()
         self.d_state = d_state
+        self.expand = expand
         d_inner = dim * expand
         self.in_proj = nn.Linear(dim, d_inner * 2, bias=False)
         self.conv1d = nn.Conv1d(d_inner, d_inner, kernel_size=d_conv,
@@ -397,6 +413,24 @@ class GatedFusion(nn.Module):
         return self.norm(weights[..., 0:1] * ssm + weights[..., 1:2] * attn + weights[..., 2:3] * moe)
 
 
+class QuadFusion(nn.Module):
+    """Four-way gated fusion for multi-attention NOVA blocks."""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.gate = nn.Linear(dim * 4, 4)
+        self.norm = RMSNorm(dim)
+
+    def forward(self, ssm: torch.Tensor, sparse: torch.Tensor,
+                ssa: torch.Tensor, resonance: torch.Tensor) -> torch.Tensor:
+        weights = F.softmax(self.gate(torch.cat([ssm, sparse, ssa, resonance], dim=-1)), dim=-1)
+        return self.norm(
+            weights[..., 0:1] * ssm +
+            weights[..., 1:2] * sparse +
+            weights[..., 2:3] * ssa +
+            weights[..., 3:4] * resonance
+        )
+
+
 # ============================================================
 # 7. NICTO SUBSYSTEMS
 # ============================================================
@@ -486,22 +520,34 @@ class ConsciousnessSubsystem(nn.Module):
 # ============================================================
 
 class UnifiedNOVABlock(nn.Module):
-    """Single NOVA block with tri-path + PRS + MoD."""
+    """Single NOVA block with quad-path attention + PRS + MoD."""
     def __init__(self, config: NICTOUnifiedConfig, layer_idx: int = 0):
         super().__init__()
         d = config.dim
 
         self.ssm_norm = RMSNorm(d, config.norm_eps)
         self.attn_norm = RMSNorm(d, config.norm_eps)
+        self.ssa_norm = RMSNorm(d, config.norm_eps)
+        self.resonance_norm = RMSNorm(d, config.norm_eps)
         self.moe_norm = RMSNorm(d, config.norm_eps)
 
         self.ssm = SelectiveSSM(d, config.ssm_d_state, config.ssm_d_conv, config.ssm_expand)
         self.attn = SparseAttention(d, config.n_heads, config.n_kv_heads, config.max_seq_len,
                                     config.attn_window_size, config.attn_n_global_tokens)
+
+        from nicto_ai.training.ssa import SSAAttention
+        self.ssa = SSAAttention(d, config.n_heads, config.n_kv_heads, config.max_seq_len,
+                                config.ssa_block_size, config.ssa_top_k,
+                                config.ssa_local_window, config.ssa_beta)
+
+        from nicto_ai.training.resonance_attention import ResonanceAttention
+        self.resonance = ResonanceAttention(d, config.n_heads, config.n_kv_heads,
+                                            config.max_seq_len, config.resonance_window)
+
         self.moe = VariableMoE(d, config.ffn_dim, config.moe_experts,
                                config.moe_activated_min, config.moe_activated_max)
 
-        self.fusion = GatedFusion(d)
+        self.fusion = QuadFusion(d)
         self.mod = MoDRouter(d, config.mod_threshold)
 
         self.use_prs = (layer_idx % 4 == 0)
@@ -512,8 +558,16 @@ class UnifiedNOVABlock(nn.Module):
         x, mod_mask, mod_probs = self.mod(x)
         ssm_out = self.ssm(self.ssm_norm(x))
         attn_out = self.attn(self.attn_norm(x))
+        ssa_out = self.ssa(self.ssa_norm(x))
+        resonance_out = self.resonance(self.resonance_norm(x))
         moe_out, aux_loss = self.moe(self.moe_norm(x))
-        fused = self.fusion(ssm_out, attn_out, moe_out)
+
+        # Quad fusion: SSM + Sparse + SSA + Resonance
+        attn_fused = self.fusion(ssm_out, attn_out, ssa_out, resonance_out)
+
+        # Combine attention fusion with MoE
+        fused = attn_fused + moe_out
+
         x = x + fused * mod_mask
         if self.use_prs:
             x, prs_state = self.prs(x, prs_state)
@@ -594,12 +648,13 @@ class NICTOUnifiedModel(nn.Module):
         self.norm = RMSNorm(d, config.norm_eps)
         self.out_down = nn.Linear(d, d // 4, bias=False)
         self.out_up = nn.Linear(d // 4, config.vocab_size, bias=False)
-        self.out_up.weight = nn.Parameter(torch.randn(config.vocab_size, d // 4) * 0.02)
 
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
             if pn.endswith("wo.weight") or pn.endswith("out_proj.weight"):
                 nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layers))
+        # Re-initialize factored output head AFTER _init_weights
+        nn.init.normal_(self.out_up.weight, mean=0.0, std=0.02)
 
         self.count_parameters()
 

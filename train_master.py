@@ -37,7 +37,7 @@ def log(msg: str):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line, flush=True)
-    with open(LOG_FILE, "a") as f:
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 
@@ -88,7 +88,7 @@ def main():
     parser.add_argument("--steps", type=int, default=10000, help="Total training steps")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
-    parser.add_argument("--warmup", type=int, default=200, help="Warmup steps")
+    parser.add_argument("--warmup", type=int, default=50, help="Warmup steps")
     parser.add_argument("--data-dir", type=str, default="training_data", help="Data directory")
     parser.add_argument("--seq-len", type=int, default=512, help="Sequence length")
     parser.add_argument("--save-every", type=int, default=1000, help="Checkpoint interval")
@@ -117,11 +117,11 @@ def main():
     start_step = 0
 
     if args.resume:
-        ckpt = torch.load(args.resume, map_location=device, weights_only=True)
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         start_step = ckpt["step"] + 1
-        log(f"Resumed from step {ckpt['step']} (loss {ckpt.get('loss', '?'):.4f})")
+        log(f"Resumed from step {ckpt['step']} (loss {float(ckpt.get('loss', 0.0)):.4f})")
 
     log(f"\nData sources ({args.data_dir}/):")
     sources = get_data_sources(args.data_dir)
@@ -197,7 +197,7 @@ def main():
                     "config": cfg,
                     "loss": avg,
                 }, ckpt_dir / "best.pt")
-            log(f"  ✓ Checkpoint saved (loss {avg:.4f})")
+            log(f"  [saved] Checkpoint (loss {avg:.4f})")
 
     ckpt_dir = Path(f"checkpoints_master/{args.config}")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
