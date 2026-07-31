@@ -119,9 +119,10 @@ def main():
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        start_step = ckpt["step"] + 1
-        log(f"Resumed from step {ckpt['step']} (loss {float(ckpt.get('loss', 0.0)):.4f})")
+        if "optimizer" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer"])
+        start_step = ckpt.get("step", -1) + 1
+        log(f"Resumed from step {ckpt.get('step', 0)} (loss {float(ckpt.get('loss', 0.0)):.4f})")
 
     log(f"\nData sources ({args.data_dir}/):")
     sources = get_data_sources(args.data_dir)
